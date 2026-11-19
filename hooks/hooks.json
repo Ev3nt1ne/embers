@@ -1,0 +1,29 @@
+{
+  "description": "Embers: the waiting rule for 5-minute subagents, and the agent guide for main sessions",
+  "hooks": {
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/subagent_start.py"],
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/session_start.py"],
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

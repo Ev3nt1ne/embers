@@ -1,0 +1,138 @@
+# Every number Embers' cost math uses, in one place. tools/thresholds.py reads this file;
+# docs/math.md explains each formula. Prices are multiples of a model's base input price, so a
+# threshold depends only on ratios; the USD base price is used only to print money.
+#
+# Marks: FACT = read in the source named (checked 2026-11-19); MEASURED = from the author's own
+# subagent transcripts; ASSUMPTION = a guess, change it here or with --set.
+
+# The model priced by default: the author's subagents are mostly Opus 5.5 (MEASURED: 74 of 125
+# subagent transcripts, 2026-11-05..19, and 24.0M of their 33.4M cache-write tokens).
+model = "opus-5-5"
+
+[multipliers]
+# FACT, same for every model: "Cache write tokens with a 5-minute TTL are 1.25 times the base
+# input tokens price", "with a 1-hour TTL are 2 times".
+# https://platform.claude.com/docs/en/build-with-claude/prompt-caching (pricing note)
+write_5m = 1.25
+write_1h = 2.0
+# FACT: output costs 5x base input for every model in the pricing table (Opus 5.5: $20 vs $4).
+# https://platform.claude.com/docs/en/about-claude/pricing
+output = 5.0
+
+# Per model: base input price (USD per million tokens, FACT, pricing table) and the cache-read
+# multiplier (FACT: "0.05x" for Opus 5.5 and Sonnet 5.5, "0.025x" for Fable and Mythos 5.1/5.2,
+# "All other models use the standard 0.1x multiplier").
+# https://platform.claude.com/docs/en/build-with-claude/prompt-caching (pricing footnotes)
+[models.opus-5-5]
+base_usd_per_mtok = 4.0
+read = 0.05
+
+[models.sonnet-5-5]
+base_usd_per_mtok = 2.0
+read = 0.05
+
+[models.fable-5-2]
+base_usd_per_mtok = 8.0
+read = 0.025
+
+[models.fable-5-1]
+base_usd_per_mtok = 10.0
+read = 0.025
+
+[models.mythos-5-2]
+base_usd_per_mtok = 8.0
+read = 0.025
+
+[models.mythos-5-1]
+base_usd_per_mtok = 10.0
+read = 0.025
+
+[models.haiku-5-5]
+# FACT: Haiku 5.5 costs $0.10 up to 100k-token prompts and $0.50 above; the price above 100k is
+# kept because a context large enough to matter here is above 100k.
+base_usd_per_mtok = 0.50
+read = 0.1
+
+[models.opus-5]
+base_usd_per_mtok = 5.0
+read = 0.1
+
+[models.sonnet-5]
+base_usd_per_mtok = 2.0
+read = 0.1
+
+[ttl]
+# FACT: the two cache lifetimes, 5 minutes and 1 hour. Subagents get 5 minutes even on a
+# subscription unless their agent file sets experimental.cacheTtl: 1h.
+# https://code.claude.com/docs/en/prompt-caching.md (Cache lifetime)
+five_minutes_s = 300
+one_hour_s = 3600
+# ASSUMPTION: the lifetime counts from the START of the request that last read or wrote the
+# cache (FACT, API prompt-caching page), but the manager only sees when that request ended. The
+# margin stands for the last request's generation time plus clock slack: a cache counts as warm
+# for (TTL - margin) after the agent's last activity. 60 s gives the study's "about 4 minutes".
+safety_margin_s = 60
+# The author's polling chunk (decision; the study's `timeout 170`). It must stay under 180 s:
+# background subagents move a shell command to the background after 3 minutes (FACT,
+# CHANGELOG 2.1.318, https://github.com/anthropics/claude-code/blob/main/CHANGELOG.md).
+chunk_s = 170
+# The Bash tool's own timeout for one chunk is chunk_s + this, so the loop's `timeout` ends it
+# first (FACT: the Bash default is 120 s, and a foreground command that reaches the tool's timeout
+# is moved to the background, https://code.claude.com/docs/en/tools-reference.md). Decision: 30 s,
+# which gives the study's `timeout: 200000`.
+bash_timeout_margin_s = 30
+# How often the waiting loop checks its done-condition (`sleep 15`). Decision; it costs nothing
+# in tokens, only a shell test.
+poll_interval_s = 15
+
+[context]
+# FACT: every current model has a 1M-token window
+# (https://platform.claude.com/docs/en/about-claude/models/overview), at standard per-token prices
+# across the whole window (https://platform.claude.com/docs/en/about-claude/pricing, Long context
+# pricing). MEASURED: the author's subagents reached up to 809k tokens, so they run on 1M.
+# Older models (Opus 4.5, Sonnet 4.5, Haiku 4.5) have 200k: try --set context.window_tokens=200000.
+window_tokens = 1_000_000
+
+[agent]
+# S, a fresh agent's baseline: system prompt, tools, CLAUDE.md and the brief. MEASURED: median
+# first-request prompt of 125 subagents, 2026-11-05..19, was 36k tokens (p25 33k, p75 37k).
+baseline_tokens = 36_000
+# F, the files the fresh agent's brief points to and that it reads in. ASSUMPTION.
+brief_files_tokens = 30_000
+# k, the turns the follow-up work takes. A resumed agent reads its whole context C on each; a
+# fresh one reads only what it holds. ASSUMPTION.
+follow_up_turns = 10
+# h, output tokens (thinking and tool calls) spent per token of context an agent builds by
+# working. Prices the redo of lost work. ASSUMPTION.
+output_per_context_token = 0.1
+
+[rule]
+# The author's send-back rule (decision, 2026-11-19): once an agent's cache has gone cold, resume
+# it only when its context C is under X tokens; up to Y tokens when it holds work that exists
+# nowhere else; otherwise start a fresh agent. In tokens, not in a share of the window (author,
+# 2026-11-19), so the rule does not move when the window changes; docs/math.md section 1.
+resume_cold_below_tokens = 150_000
+resume_cold_unique_below_tokens = 350_000
+
+[one_hour]
+# L, resume load: the sum of an agent's context sizes at its resumes, divided by its final context
+# (its total cache writes over its life). One resume near the end gives 1. ASSUMPTION.
+resume_load = 1.0
+# z, the chance a resume comes after the 1-hour cache has expired too. ASSUMPTION.
+p_past_hour = 0.0
+
+[poll]
+# Per poll turn: the new tail written to the cache (tool result and the turn's own text) and the
+# output generated. Both ASSUMPTION, for a terse poll ("rc=124, 40% done").
+tail_tokens = 300
+output_tokens = 150
+# The context a reference agent holds while it waits, to print a break-even in minutes. The
+# measured rewrites were 150k-620k; 300k sits in that range. ASSUMPTION.
+reference_context_tokens = 300_000
+
+[measured]
+# The author's two weeks, 117 subagents: 19 cold rewrites of 150k-620k tokens, about 7.1M tokens
+# in all, every one on work sent back after 7-116 minutes. Source: the author's own study of their
+# subagent transcripts, 2026-11-19 (not published).
+rewrites = 19
+rewrite_tokens = 7_100_000

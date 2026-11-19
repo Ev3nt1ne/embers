@@ -1,0 +1,11 @@
+# To do
+
+Features to assess later. Nothing here is planned yet.
+
+- **Ask returning work to be written to files.** The guide could tell the main session, when it
+  hands off work that may come back, to ask the agent to write its findings to a file, so that
+  a fresh agent can pick them up (the guide's line "Otherwise: start a fresh agent with a brief
+  that points to the files of the earlier work" assumes such files). Not added for now
+  (2026-11-19), for two reasons: it would create many new files, and writing them spends
+  tokens. Assess whether that cost is lower than the cold resumes and redone work it would
+  avoid.

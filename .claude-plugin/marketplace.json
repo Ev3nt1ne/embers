@@ -1,0 +1,22 @@
+{
+  "name": "embers",
+  "owner": {
+    "name": "Ev3nt1ne",
+    "url": "https://github.com/Ev3nt1ne"
+  },
+  "metadata": {
+    "description": "Embers, a single-plugin marketplace: the plugin is this repository's root",
+    "version": "0.1.0"
+  },
+  "plugins": [
+    {
+      "name": "embers",
+      "source": "./",
+      "description": "Keeps subagent prompt caches from going cold",
+      "author": {
+        "name": "Ev3nt1ne",
+        "url": "https://github.com/Ev3nt1ne"
+      }
+    }
+  ]
+}
