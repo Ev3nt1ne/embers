@@ -132,7 +132,7 @@ reference_context_tokens = 300_000
 
 [measured]
 # The author's two weeks, 117 subagents: 19 cold rewrites of 150k-620k tokens, about 7.1M tokens
-# in all, every one on work sent back after 7-116 minutes. Source: the author's own study of their
-# subagent transcripts, 2026-11-19 (not published).
+# in all. Source: the author's own study of their subagent transcripts, 2026-11-19 (not
+# published). A later recount of what came before each rewrite is in docs/math.md.
 rewrites = 19
 rewrite_tokens = 7_100_000

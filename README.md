@@ -25,19 +25,32 @@ that cheap: the unchanged prefix is read from the cache instead of being process
 cache expires after a gap with no requests. For subagents the gap is 5 minutes, even on a
 subscription where the main conversation gets an hour.
 
-Two patterns blow through it:
+Three patterns blow through it:
 
 - **A subagent blocked on a tool.** It runs a 15-minute test suite in one Bash call, or ends its
   turn to wait for a background job. The first request after the wait rewrites everything.
 - **Work sent back late.** The main session hands a finished subagent a follow-up 20 minutes
   later. The resume rewrites the agent's whole context.
+- **A response longer than the cache.** The lifetime counts from the start of a request, so a
+  single response that takes over 5 minutes to generate, such as a large file written in one
+  call, leaves the cache expired for the very next request, with no pause at all.
 
 A measured case, from one user's two weeks of ordinary work: 117 subagents rewrote 19 cold
-caches of 150k to 620k tokens, about 7.1M tokens in all. Every one of them was work sent back 7
-to 116 minutes after the agent's last activity. At Opus 5.5 list prices that is about $35.50, of
-which about $34 would have been avoided had each resume found its cache warm. Public reports
-show the same pattern at larger scale: in one, 190 rewrites of over 100k tokens each followed
-test suites that ran 10 to 15 minutes and drained 54% of a weekly limit in under a day
+caches of 150k to 620k tokens, about 7.1M tokens in all. At Opus 5.5 list prices that is about
+$35.50, of which about $34 would have been avoided had each found its cache warm. A recount of
+the same transcripts (2026-11-05 to 2026-11-19) asked what came before each rewrite. It
+counted as a cold rewrite any subagent request that wrote at least 100k tokens to the cache while
+reading at least 100k fewer than the request before it had cached, and found 24 in 134 subagents,
+about 8.5M tokens:
+
+- 13 (4.9M tokens) were work sent back, 6 to 117 minutes after the agent had handed back;
+- 4 (1.4M) came when an agent that had ended its turn was woken by a system notification, 1 to
+  11 minutes later;
+- 7 (2.2M) followed a single response of 28k to 63k output tokens that ran 5 to 8 minutes.
+
+None followed a wait on a tool result. Public reports show the first pattern at larger scale: in
+one, 190 rewrites of over 100k tokens each followed test suites that ran 10 to 15 minutes and
+drained 54% of a weekly limit in under a day
 ([#103309](https://github.com/anthropics/claude-code/issues/103309)).
 
 ## How the cache works
@@ -184,6 +197,10 @@ what the sessions read.
   so the relay goes uncovered by the waiting rule then, and the guide's 1-hour figures do not
   hold.
 - **A wait over an hour still goes cold**, for the relay and for a main session alike.
+- **A response longer than 5 minutes.** A subagent whose one response runs past its 5-minute
+  lifetime, counted from the request's start, finds its cache gone on the next request. Neither
+  the waiting rule nor the guide covers this: the agent never waits and never finishes. The
+  relay's 1-hour cache does. In the recount above, 7 of the 24 rewrites were of this kind.
 - **Resumes inside the lifetime may still miss.** Open reports show a resumed subagent rewriting
   its context inside a 1-hour lifetime when its history held thinking blocks
   ([#94728](https://github.com/anthropics/claude-code/issues/94728),

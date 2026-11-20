@@ -241,8 +241,8 @@ turns are.
 ## The author's measured case
 
 **The data (fact; the author's own study of their transcripts, not published).** Over two weeks,
-117 subagents rewrote 19 cold caches of 150k–620k tokens, about 7.1M tokens in all. Every rewrite came on work sent back after
-7 to 116 minutes.
+117 subagents rewrote 19 cold caches of 150k–620k tokens, about 7.1M tokens in all. A third
+recount, below, asked what came before each rewrite: not all of them were work sent back.
 
 **Priced on Opus 5.5** (inference: most of the author's subagent writes are Opus 5.5, 24.0M of
 33.4M, fact):
@@ -250,7 +250,7 @@ turns are.
 | | Formula | Base-input tokens | USD |
 |---|---|---|---|
 | As it happened, cold at 5 minutes | 7.1M × w5 | 8.9M | **$35.50** |
-| Had each resume been warm | 7.1M × r | 0.36M | **$1.42** |
+| Had each found its cache warm | 7.1M × r | 0.36M | **$1.42** |
 | Avoidable | 7.1M × (w5 − r) | 8.5M | $34.08 |
 
 **On a subscription** (inference): the dollars stand for list-price weight against the weekly
@@ -271,6 +271,39 @@ least 100k). It found:
 The conclusion (inference) agrees with the study: a blanket 1 hour would have cost more, and a
 1-hour agent pays only where an agent is sent back again and again. One agent in that recount was
 rewritten ten times in one afternoon.
+
+**A third recount: what came before each rewrite (fact, the author's transcripts, 2026-11-20).**
+Window 2026-11-05 to 2026-11-19 13:00 UTC, 134 subagents. A cold rewrite is a request, not the
+agent's first, that writes at least 100k tokens to the cache **and** reads at least 100k fewer
+than the previous request had cached (its read plus its write). The second half of the test
+leaves out a large tool result read into a warm cache; this window had one such write. The gap
+runs from the previous request's start, which is when the cache's clock starts. It found 24
+rewrites of 8.5M tokens:
+
+| What came before | Rewrites | Tokens | Gap from the previous request's start |
+|---|---|---|---|
+| Work sent back: the agent handed back, then its manager sent it more work | 13 | 4.9M | 6 to 117 min |
+| A system notification woke an agent that had ended its turn | 4 | 1.4M | 1 to 11 min |
+| One response ran 5 to 8 minutes, and the next request started at once | 7 | 2.2M | 5 to 8 min |
+| A tool result that came back after a wait | 0 | | |
+
+- **Work sent back.** The manager's message arrived within 20 s before each rewrite. The agent's
+  hand-back is itself a tool call whose result returns at once, so what the agent waited on was
+  the message, not the tool.
+- **The notification** is identified by its tag; its text was not read. That it was a background
+  job's notice is an inference. The shortest gap, 1.2 minutes, shows a model change and dropped
+  thinking blocks in the transcript. It is more likely a changed prefix than an expired cache
+  (inference; see the README's known limits).
+- **The long responses** produced 28k to 63k output tokens each, at the same pace as the agents'
+  short requests, so they were generation, not stalls or retries (inference from that pace). The
+  lifetime counts from a request's start, so such a response leaves its own cache expired. The
+  agent then went on within 6 s.
+
+What this changes (inference). Work sent back is the larger part, 58% of the rewritten tokens,
+but not the whole. A subagent blocked on a long tool, the case public reports show at scale, had
+no instance here. The long-response case escapes the waiting rule and the send-back guide, since
+the agent never waits and never finishes; a 1-hour cache covers it. The 60 s margin in the warm
+window above covers the requests before a hand-back (they ran under a minute here), not these.
 
 ## How to recompute
 
