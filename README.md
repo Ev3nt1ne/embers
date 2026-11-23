@@ -43,7 +43,8 @@ counted as a cold rewrite any subagent request that wrote at least 100k tokens t
 reading at least 100k fewer than the request before it had cached, and found 24 in 134 subagents,
 about 8.5M tokens:
 
-- 13 (4.9M tokens) were work sent back, 6 to 117 minutes after the agent had handed back;
+- 13 (4.9M tokens) were work sent back, 6 to 117 minutes after the agent's previous request began (a little
+  less from its hand-back);
 - 4 (1.4M) came when an agent that had ended its turn was woken by a system notification, 1 to
   11 minutes later;
 - 7 (2.2M) followed a single response of 28k to 63k output tokens that ran 5 to 8 minutes.
@@ -201,10 +202,11 @@ what the sessions read.
   lifetime, counted from the request's start, finds its cache gone on the next request. Neither
   the waiting rule nor the guide covers this: the agent never waits and never finishes. The
   relay's 1-hour cache does. In the recount above, 7 of the 24 rewrites were of this kind.
-- **Resumes inside the lifetime may still miss.** Open reports show a resumed subagent rewriting
-  its context inside a 1-hour lifetime when its history held thinking blocks
-  ([#94728](https://github.com/anthropics/claude-code/issues/94728),
-  [#87215](https://github.com/anthropics/claude-code/issues/87215)). Untested on the current
+- **Resumes inside the lifetime may still miss.** Open reports show a resumed or woken subagent
+  rewriting its context inside a 1-hour lifetime
+  ([#87215](https://github.com/anthropics/claude-code/issues/87215),
+  [#94728](https://github.com/anthropics/claude-code/issues/94728)); the second ties it to the
+  agent's thinking blocks missing from the resumed history. Untested on the current
   version. To check the relay, read its transcript: `ephemeral_1h_input_tokens` should be above
   zero, and a resume 10 to 50 minutes later should show `cache_read_input_tokens` close to the
   previous context size.
