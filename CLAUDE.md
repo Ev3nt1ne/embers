@@ -16,6 +16,8 @@ paths, names, transcripts or account details). Only the owner pushes.
   subagent's effective cache lifetime; `rules.py` holds both texts.
 - `config/prices.toml`: every number, with its source. `tools/thresholds.py` computes from it,
   and `rule_numbers()` feeds the texts.
+- `tools/rewrites.py`: counts and prices cold rewrites in a user's own subagent transcripts, for
+  a before/after measurement; reads only, never imported by the hooks.
 - `tests/`: unittest, standard library.
 
 Python 3 standard library only. The hooks must never block a session: every error exits 0.
