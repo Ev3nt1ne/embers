@@ -18,6 +18,11 @@ paths, names, transcripts or account details). Only the owner pushes.
   and `rule_numbers()` feeds the texts.
 - `tools/rewrites.py`: counts and prices cold rewrites in a user's own subagent transcripts, for
   a before/after measurement; reads only, never imported by the hooks.
+- `docs/`: `math.md` derives every number; `design.md` holds the cache facts, how each hook
+  decides, the design choices and the sources; `limits.md` every known limit; `measuring.md` the
+  measured case, how to run `tools/rewrites.py`, and how to recompute the thresholds. The README
+  is for deciding and installing, and links to them; a section moved out keeps its heading there,
+  so outside links to its anchor still land.
 - `tests/`: unittest, standard library.
 
 Python 3 standard library only. The hooks must never block a session: every error exits 0.

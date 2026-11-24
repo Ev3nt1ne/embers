@@ -233,7 +233,7 @@ each further hour of refreshing costs `(3600/T)(r C + w5 t + o y)`. For a 300k c
 Opus 5.5 that is **0.95 of one rewrite, about $1.37 an hour**.
 
 A 2-hour wait at 300k therefore costs about $2.73 in polls. Letting the cache go cold would cost
-$1.44, so the ruling pays about $1.30 for the simplicity. The README records it.
+$1.44, so the ruling pays about $1.30 for the simplicity. [design.md](design.md#design-choices-and-why) records it.
 
 **What would change it:** r above all (it sets n*), the chunk length, and how terse the poll
 turns are.
@@ -293,7 +293,7 @@ rewrites of 8.5M tokens:
 - **The notification** is identified by its tag; its text was not read. That it was a background
   job's notice is an inference. The shortest gap, 1.2 minutes, shows a model change and dropped
   thinking blocks in the transcript. It is more likely a changed prefix than an expired cache
-  (inference; see the README's known limits).
+  (inference; see [limits.md](limits.md)).
 - **The long responses** produced 28k to 63k output tokens each, at the same pace as the agents'
   short requests, so they were generation, not stalls or retries (inference from that pace). The
   lifetime counts from a request's start, so such a response leaves its own cache expired. The
