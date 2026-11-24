@@ -101,7 +101,20 @@ agent finishes. It also says when to resume a finished subagent and when to star
 
 ## Install
 
-From a local checkout:
+From GitHub:
+
+```
+claude plugin marketplace add Ev3nt1ne/embers
+claude plugin install embers@embers
+```
+
+Claude Code clones the repository over SSH, and over HTTPS when SSH fails. To update, run
+`claude plugin marketplace update embers`, then `claude plugin uninstall embers@embers` and
+install again: `claude plugin update embers@embers` installs a newer commit only when the
+version in `.claude-plugin/plugin.json` has changed. To uninstall, run
+`claude plugin uninstall embers@embers`, then `claude plugin marketplace remove embers`.
+
+From a local checkout, to edit the plugin:
 
 ```
 claude plugin marketplace add /path/to/embers

@@ -1,7 +1,7 @@
 {
   "name": "embers",
   "description": "Keeps subagent prompt caches from going cold: a 1-hour relay agent, a waiting rule for 5-minute subagents, and a guide for when to reuse an agent or start fresh",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "author": {
     "name": "Ev3nt1ne",
     "url": "https://github.com/Ev3nt1ne"
