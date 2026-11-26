@@ -40,10 +40,10 @@ inherits every tool, and no `model` field, so it runs on the model of the sessio
 Its body is short: its expertise comes from each call's brief, and it ends with a report that
 keeps fact and inference apart.
 
-Its description tells the main session when to pick it: work that may come back to the same
-agent after the 5-minute cache would lapse, such as review rounds, ping-pong between the main
-session and the agent, or follow-ups deferred to later. Not one-shot tasks, where the 5-minute
-agent is cheaper.
+Its description tells the main session when to pick it: work the main session plans to send
+back to the same agent after the 5-minute cache would lapse, such as review rounds, ping-pong
+between the main session and the agent, or follow-ups it has planned. Not one-shot tasks, nor
+work that only might come back, where the 5-minute agent is cheaper.
 
 ### The waiting rule
 
@@ -86,7 +86,8 @@ work back to one:
 - a **background session** for long project work that edits files, or must outlive the current
   session;
 - a **5-minute subagent** for a one-shot task;
-- **`embers:relay`** for work that may come back more than 240 seconds after the agent finishes;
+- **`embers:relay`** for work the main session plans to send back more than 240 seconds after the
+  agent finishes, such as review rounds; not for work that only might come back;
 - **sending work back**: run `date` when a subagent finishes and keep the time; resume it within
   240 seconds of its finish (59 minutes for the relay); later, resume it only if its
   `subagent_tokens` is under 150,000, or under 350,000 when it holds work not saved anywhere
@@ -125,6 +126,12 @@ what the sessions read.
   minutes late. Public measurements of a blanket 1 hour range from 8.6% worse to 10.5% better,
   depending on the workload. A dedicated agent for the work that comes back is the defensible
   choice. ([math.md](math.md#2-a-5-minute-or-a-1-hour-agent), section 2.)
+- **The relay for work planned to come back, not for work that might.** In one user's first week
+  with Embers, 8 of 24 relays were one-shot jobs that never paused over 4 minutes, and paid the
+  1-hour premium for nothing. A relay's premium on everything it writes is about what one late
+  return saves: in that week, about $0.94 of premium per relay against about $1.31 saved per
+  warm return (inference, from the week's averages). So the relay pays only where a return is
+  planned. ([measuring.md](measuring.md#the-first-week-with-embers).)
 - **Thresholds in tokens, not in a share of the context window.** What decides between a cold
   resume and a fresh agent is how much work a fresh agent would have to redo, and that does not
   depend on the window. A percentage would move whenever the window changes. 150k and 350k are

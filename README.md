@@ -62,10 +62,10 @@ The settings that change the lifetime, and which one wins:
 ### The relay agent: `embers:relay`
 
 A general-purpose agent with `experimental: { cacheTtl: 1h }`, every tool, and the model of the
-session that starts it. The main session picks it for work that may come back to the same agent
-after the 5-minute cache would lapse: review rounds, ping-pong between the main session and the
-agent, follow-ups deferred to later. One-shot tasks stay with the 5-minute agent, which is
-cheaper for them.
+session that starts it. The main session picks it for work it plans to send back to the same
+agent after the 5-minute cache would lapse: review rounds, ping-pong between the main session and
+the agent, follow-ups it has planned. One-shot tasks, and work that only might come back, stay
+with the 5-minute agent, which is cheaper for them.
 
 ### The waiting rule, for 5-minute subagents only
 
@@ -99,7 +99,7 @@ never reads your agent files for this line and never changes them.
 
 A `SessionStart` hook tells every main session, background sessions included, which agent to
 use: a background session for long project work that edits files, a 5-minute subagent for a
-one-shot task, and `embers:relay` for work that may come back more than 240 seconds after the
+one-shot task, and `embers:relay` for work it plans to send back more than 240 seconds after the
 agent finishes. It also says when to resume a finished subagent and when to start a fresh one:
 [docs/design.md](docs/design.md#the-guide-for-the-main-session).
 

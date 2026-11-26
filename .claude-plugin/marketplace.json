@@ -6,7 +6,7 @@
   },
   "metadata": {
     "description": "Embers, a single-plugin marketplace: the plugin is this repository's root",
-    "version": "0.2.0"
+    "version": "0.2.1"
   },
   "plugins": [
     {

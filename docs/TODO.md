@@ -8,7 +8,11 @@ Features to assess later. Nothing here is planned yet.
   that points to the files of the earlier work" assumes such files). Not added for now
   (2026-11-19), for two reasons: it would create many new files, and writing them spends
   tokens. Assess whether that cost is lower than the cold resumes and redone work it would
-  avoid.
+  avoid. Still open (2026-11-26): a planned return now goes to the relay, so a 5-minute agent
+  sent work back is an unplanned return, which the main session cannot foresee to ask a file
+  for. The agent's final report already lands in the main session, and copying it into a fresh
+  agent's brief costs the main session output tokens. To be evaluated after two more weeks of
+  measurement with the new relay wording.
 
 - **Cold caches after pauses under 5 minutes.** In two weeks of one user's transcripts, 9 subagent
   requests found the cache cold even though the pause before them was under 5 minutes. A likely

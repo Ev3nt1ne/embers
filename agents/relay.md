@@ -1,6 +1,6 @@
 ---
 name: relay
-description: "General-purpose agent with a 1-hour prompt cache. Use it, in place of general-purpose, for work that may come back to the same agent more than about 4 minutes after its last activity, when a 5-minute cache would have lapsed: review rounds, ping-pong between you and the agent, or follow-ups deferred to later. Not for one-shot tasks that report and are done; there the regular 5-minute agent is cheaper."
+description: "General-purpose agent with a 1-hour prompt cache. Use it, in place of general-purpose, for work you plan to send back to the same agent more than about 4 minutes after its last activity, when a 5-minute cache would have lapsed: review rounds, ping-pong between you and the agent, or follow-ups you have planned. Not for one-shot tasks, nor for work that only might come back; there the regular 5-minute agent is cheaper."
 experimental:
   cacheTtl: 1h
 ---

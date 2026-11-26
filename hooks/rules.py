@@ -106,7 +106,7 @@ Why: an agent's prompt cache expires {ttl5_s} after its last request ({ttl1_s} f
 Choosing an agent:
 - Long project work that edits files, or must outlive this session: a background session.
 - A one-shot task: a subagent ({ttl5_adj} cache).
-- Work that may come back to the same agent later than {warm_5m_s} after it finishes: embers:relay ({ttl1_adj} cache).
+- Work you plan to send back to the same agent later than {warm_5m_s} after it finishes, such as review rounds: embers:relay ({ttl1_adj} cache). Not for work that only might come back.
 
 When a subagent finishes and you may send it more work: run `date` and keep the time.
 

@@ -39,7 +39,7 @@ Why: an agent's prompt cache expires 5 minutes after its last request (1 hour fo
 Choosing an agent:
 - Long project work that edits files, or must outlive this session: a background session.
 - A one-shot task: a subagent (5-minute cache).
-- Work that may come back to the same agent later than 240 seconds after it finishes: embers:relay (1-hour cache).
+- Work you plan to send back to the same agent later than 240 seconds after it finishes, such as review rounds: embers:relay (1-hour cache). Not for work that only might come back.
 
 When a subagent finishes and you may send it more work: run `date` and keep the time.
 
@@ -72,7 +72,8 @@ class Texts(unittest.TestCase):
 
     def test_texts_word_for_word_at_todays_numbers(self):
         # the owner's final texts (2026-11-19), with the waiting rule's "one per response"
-        # (2026-11-26); FALLBACK holds today's numbers (test above)
+        # (2026-11-26) and the guide's relay line for work planned to come back (2026-11-26);
+        # FALLBACK holds today's numbers (test above)
         self.assertEqual(rules.manager_guide(rules.FALLBACK), GUIDE_TODAY)
         self.assertEqual(rules.waiting_rule(rules.FALLBACK), WAITING_TODAY)
 
