@@ -13,6 +13,12 @@ limits a user is most likely to meet; this page has them all.
   the waiting rule nor the guide covers this: the agent never waits and never finishes. The
   relay's 1-hour cache does. In the [recount](measuring.md#the-measured-case), 7 of the 24
   rewrites were of this kind.
+- **A permission prompt.** A subagent that runs a command your settings `ask` about waits on the
+  prompt, blocked before the command runs. Answered after more than 5 minutes, its next request
+  rewrites its whole context, and no rule can reach it: the agent cannot act while it waits. The
+  relay's 1-hour cache covers a prompt answered within the hour. In one user's first week with
+  Embers, an agent waited about 13 minutes on a prompt, twice (two rewrites). Keep commands that
+  ask out of subagents' work, or answer their prompts promptly.
 - **Resumes inside the lifetime may still miss.** Open reports show a resumed or woken subagent
   rewriting its context inside a 1-hour lifetime
   ([#87215](https://github.com/anthropics/claude-code/issues/87215),

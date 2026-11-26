@@ -91,7 +91,7 @@ WAITING_RULE = """\
 Embers: waiting without losing your prompt cache. If your own instructions say your prompt cache lasts {ttl1_s}, ignore this rule.
 
 - A command that may take longer than {chunk_s} seconds: start it in the background (run_in_background, or nohup to a log).
-- Wait for it in Bash calls of at most {chunk_s} seconds, with the Bash timeout set to {bash_timeout_ms}:
+- Wait for it in Bash calls of at most {chunk_s} seconds, one per response, with the Bash timeout set to {bash_timeout_ms}:
   `timeout {chunk_s} bash -c 'until <done-condition>; do sleep {poll_interval_s}; done'; echo rc=$?`
 - rc=124: write one short progress line from `tail` of the log, then wait again. rc=0: done. Other: fix the wait command.
 - Keep waiting this way however long the job runs.

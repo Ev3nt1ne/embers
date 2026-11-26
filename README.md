@@ -69,14 +69,16 @@ cheaper for them.
 
 A `SubagentStart` hook injects a short rule into every subagent whose effective cache lifetime
 is 5 minutes: start a command that may take longer than 170 seconds in the background, then wait
-for it in Bash calls of at most 170 seconds, with the Bash tool's timeout set to 200000 ms:
+for it in Bash calls of at most 170 seconds, one per response, with the Bash tool's timeout set
+to 200000 ms:
 
 ```
 timeout 170 bash -c 'until <done-condition>; do sleep 15; done'; echo rc=$?
 ```
 
 After each call, one short progress line from the log's `tail`, then wait again, however long
-the job runs. Never one long blocking call, and never the turn ended to wait for a job. A
+the job runs. Never one long blocking call, never two waits in one response (they run one after
+another, so the next request comes too late), and never the turn ended to wait for a job. A
 1-hour agent, the relay or any agent of your own with `cacheTtl: 1h`, gets nothing, and main
 conversations never get the rule. Anything the hook cannot read counts as 5 minutes, and the
 rule goes in.
@@ -135,6 +137,8 @@ outranks every agent's `cacheTtl`, so the relay would quietly get 5 minutes.
 - A wait over an hour still goes cold, for the relay and for a main session alike.
 - A single response longer than 5 minutes leaves a 5-minute subagent's cache cold; only the
   relay's 1-hour cache covers it.
+- A permission prompt answered after more than 5 minutes leaves a 5-minute subagent's cache
+  cold; no rule can reach an agent blocked on one.
 - Resumes inside the lifetime may still miss
   ([#87215](https://github.com/anthropics/claude-code/issues/87215),
   [#94728](https://github.com/anthropics/claude-code/issues/94728)).

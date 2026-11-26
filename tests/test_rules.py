@@ -53,7 +53,7 @@ WAITING_TODAY = """\
 Embers: waiting without losing your prompt cache. If your own instructions say your prompt cache lasts 1 hour, ignore this rule.
 
 - A command that may take longer than 170 seconds: start it in the background (run_in_background, or nohup to a log).
-- Wait for it in Bash calls of at most 170 seconds, with the Bash timeout set to 200000:
+- Wait for it in Bash calls of at most 170 seconds, one per response, with the Bash timeout set to 200000:
   `timeout 170 bash -c 'until <done-condition>; do sleep 15; done'; echo rc=$?`
 - rc=124: write one short progress line from `tail` of the log, then wait again. rc=0: done. Other: fix the wait command.
 - Keep waiting this way however long the job runs.
@@ -71,7 +71,8 @@ class Texts(unittest.TestCase):
         self.assertEqual(rules.FALLBACK, thresholds.load_rule_numbers())
 
     def test_texts_word_for_word_at_todays_numbers(self):
-        # the owner's final texts (2026-11-19); FALLBACK holds today's numbers (test above)
+        # the owner's final texts (2026-11-19), with the waiting rule's "one per response"
+        # (2026-11-26); FALLBACK holds today's numbers (test above)
         self.assertEqual(rules.manager_guide(rules.FALLBACK), GUIDE_TODAY)
         self.assertEqual(rules.waiting_rule(rules.FALLBACK), WAITING_TODAY)
 

@@ -113,6 +113,11 @@ what the sessions read.
   the wait, so the turn's own generation time is part of it; background subagents move a shell
   command to the background after 3 minutes; and the Bash tool's default timeout is 2 minutes,
   so the call needs an explicit one above the loop's.
+- **One wait per response.** Tool calls in one response run one after another, and the next
+  request goes out only after the last of them, so two or three waits in one response add up past
+  the lifetime. In one user's first week with Embers, an agent did this and sent its next request
+  5.2 to 7.9 minutes after the previous one started: three cold rewrites. One wait per response
+  makes each wait end in a new request, which resets the timer.
 - **The relay does not get the waiting rule.** A 1-hour cache survives the waits the rule exists
   for, and polling every 170 seconds would spend turns for nothing.
 - **A 1-hour cache per agent, not for every subagent.** A 1-hour write costs 2 against 1.25. For
