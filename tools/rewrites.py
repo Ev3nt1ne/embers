@@ -12,13 +12,22 @@ config/prices.toml, the cache cost of every subagent request for comparison, and
     python3 tools/rewrites.py --since 2026-11-01 --list              # every rewrite, one line each
     python3 tools/rewrites.py --since 2026-11-01 --detail            # and what happened before it
     python3 tools/rewrites.py --min-write 50000 --json
+    python3 tools/rewrites.py --since 2026-11-01 --savings           # did Embers save money?
+    python3 tools/rewrites.py --since 2026-11-01 --savings --embers-on 2026-11-15..
 
 A cold rewrite is a request, not the agent's first, that writes at least --min-write tokens to
 the cache (default 100,000) and reads at least --min-write fewer than the previous request had
 cached: the cache it should have found was gone, and it wrote the context again.
+
+--savings prints a two-by-two table of subagent prompt cost instead: the subagents that ran
+without Embers, measured and computed as if Embers had been on; and those that ran with it,
+measured and computed as if it had been off. A subagent ran with Embers when its transcript
+holds the waiting rule Embers' SubagentStart hook injects, or it is the relay; --embers-on
+names the dates instead.
 """
 import argparse
 import json
+import math
 import os
 import re
 import statistics
@@ -54,6 +63,9 @@ CLAUDE_CODE_BRACKETS = ("[SYSTEM NOTIFICATION", "[Request interrupted")
 BRACKET = "[...]"
 # A tool result and a message this close together arrived together.
 TIE_S = 2.0
+# The first words of the waiting rule (hooks/rules.py), which Claude Code stores in the
+# transcript as an attachment of the SubagentStart hook: a subagent with it ran with Embers.
+EMBERS_RULE_MARK = "Embers: waiting without losing your prompt cache"
 
 
 def default_root():
@@ -138,6 +150,23 @@ def _is_notification(text):
     return (text or "").lstrip().startswith(NOTIFICATION_TAGS)
 
 
+def _holds_embers_rule(att):
+    """Whether an attachment is the SubagentStart hook's output carrying Embers' waiting rule.
+    Claude Code stores the hook's run (hook_success, the rule in its stdout) and the context it
+    added (hook_additional_context, the rule in its content); either one counts. Only hook
+    attachments are read, so a brief that quotes the rule does not count."""
+    if att.get("hookEvent") != "SubagentStart":
+        return False
+    texts = []
+    for key in ("content", "stdout"):
+        value = att.get(key)
+        if isinstance(value, str):
+            texts.append(value)
+        elif isinstance(value, list):
+            texts.extend(v for v in value if isinstance(v, str))
+    return any(EMBERS_RULE_MARK in t for t in texts)
+
+
 def _apply_usage(req, line, ts, tool_names):
     """Each content block of a response is its own line, all carrying the request's usage; the
     last line wins, and output takes the largest figure seen."""
@@ -173,7 +202,7 @@ def read_agent(path):
     path = Path(path)
     agent_id = path.stem[len("agent-"):] if path.stem.startswith("agent-") else path.stem
     agent = {"id": agent_id, "path": str(path), "type": None, "requests": [], "bad_lines": 0,
-             "unreadable": False}
+             "unreadable": False, "embers_rule": False}
     meta = path.with_name(path.stem + ".meta.json")
     try:
         data = json.loads(meta.read_text(encoding="utf-8"))
@@ -251,6 +280,8 @@ def read_agent(path):
             att = line.get("attachment")
             if isinstance(att, dict) and isinstance(att.get("type"), str):
                 sub = att["type"]
+            if isinstance(att, dict) and _holds_embers_rule(att):
+                agent["embers_rule"] = True
             pending["events"].append({"at": ts, "kind": kind if not sub else f"{kind}:{sub}"})
     return agent
 
@@ -497,6 +528,133 @@ def summarize(agents, prices, since=None, until=None, relay_type=RELAY):
     return s
 
 
+# --- with and without Embers ---------------------------------------------------------------------
+#
+# The cost model of --savings, prompt side only, at list prices (docs/measuring.md, "Did Embers
+# save you money?"). Each subagent's requests in the window are measured as they ran; the
+# subagents that ran without Embers are also priced as if it had been on, and those that ran
+# with it as if it had been off.
+
+def embers_parts(agent, since=None, until=None, relay_type=RELAY, ranges=None):
+    """An agent's requests in [since, until), sorted by whether they ran with Embers: a list of
+    (on, requests). Without ranges, the whole agent is on or off: on when its transcript holds
+    the waiting rule or its type is the relay. With ranges, pairs (from, to) where either may be
+    None, a request is on when it started inside one of them, whatever the agent; an agent that
+    spans a boundary gives two parts."""
+    reqs = [r for r in agent["requests"] if in_window(r["start"], since, until)]
+    if not reqs:
+        return []
+    if ranges is None:
+        return [(bool(agent["embers_rule"] or agent["type"] == relay_type), reqs)]
+    flags = [any(in_window(r["start"], a, b) for a, b in ranges) for r in reqs]
+    on = [r for r, f in zip(reqs, flags) if f]
+    off = [r for r, f in zip(reqs, flags) if not f]
+    return [(True, on)] * bool(on) + [(False, off)] * bool(off)
+
+
+def with_embers(reqs, prices, one_hour_s=ONE_HOUR_S, chunk_s=170, poll=None):
+    """What a part that ran without Embers would have cost with it, as a change in USD.
+
+    - An agent with a cold rewrite caused by a resume would have been the relay: every 5-minute
+      write is priced at the 1-hour write, and each rewrite whose gap is under the 1-hour
+      lifetime reads its rewritten tokens instead of writing them (its new tail stays written).
+      Its rewrites past the hour stay, at the 1-hour price.
+    - In any other agent, a rewrite caused by a system notification is replaced by the waiting
+      rule's polls: one per chunk_s of the gap, less the request that ends the wait, at least
+      one; each reads the rewritten context and writes the poll's tail, and its output is
+      counted too.
+    - Every other request stays as it was.
+    """
+    poll = poll or {"tail_tokens": 300, "output_tokens": 150}
+    d = {"relay": any(r["rewrite"] and r["cause"] == RESUME for r in reqs),
+         "relay_1h_usd": 0.0, "relay_rewrites_read": 0, "relay_read_usd": 0.0,
+         "notifications_polled": 0, "polls": 0, "notification_usd": 0.0, "poll_usd": 0.0}
+    for r in reqs:
+        p = prices.rates(r["model"])
+        if d["relay"]:
+            d["relay_1h_usd"] += p["usd"] * (p["w1"] - p["w5"]) * r["write_5m"]
+            if r["rewrite"] and r["gap_s"] is not None and r["gap_s"] < one_hour_s:
+                d["relay_rewrites_read"] += 1
+                d["relay_read_usd"] += p["usd"] * (p["w1"] - p["r"]) * r["rewritten"]
+        elif r["rewrite"] and r["cause"] == NOTIFICATION:
+            n = max(1, math.ceil((r["gap_s"] or 0) / chunk_s) - 1)
+            d["notifications_polled"] += 1
+            d["polls"] += n
+            d["notification_usd"] += prices.avoidable(r)
+            d["poll_usd"] += n * p["usd"] * (p["r"] * r["rewritten"]
+                                             + p["w5"] * poll["tail_tokens"]
+                                             + p["o"] * poll["output_tokens"])
+    d["change_usd"] = (d["relay_1h_usd"] - d["relay_read_usd"]
+                       - d["notification_usd"] + d["poll_usd"])
+    return d
+
+
+def without_embers(reqs, prices, is_relay, lifetimes_s=(FIVE_MINUTES_S, ONE_HOUR_S)):
+    """What a part that ran with Embers would have cost without it, as a change in USD. Only
+    the relay changes: its 1-hour writes are priced at the 5-minute write, and each of its
+    requests that started between the two lifetimes after the previous request's start, and
+    read its cache, would have found a 5-minute cache gone: the prefix it read is priced as a
+    5-minute write instead of a read. A 5-minute agent is left as it ran."""
+    d = {"relay": bool(is_relay), "relay_1h_usd": 0.0, "requests_cold": 0, "cold_usd": 0.0}
+    for r in reqs if is_relay else []:
+        p = prices.rates(r["model"])
+        d["relay_1h_usd"] += p["usd"] * (p["w1"] - p["w5"]) * r["write_1h"]
+        if (r["gap_s"] is not None and lifetimes_s[0] < r["gap_s"] < lifetimes_s[1]
+                and not r["rewrite"] and r["read"] > 0):
+            d["requests_cold"] += 1
+            d["cold_usd"] += p["usd"] * (p["w5"] - p["r"]) * r["read"]
+    d["change_usd"] = d["cold_usd"] - d["relay_1h_usd"]
+    return d
+
+
+def savings(agents, prices, cfg, since=None, until=None, relay_type=RELAY, ranges=None):
+    """The --savings table: per group (off, on) its subagents and requests, its prompt cost
+    measured and computed, what Embers saved, and the parts of the computed change."""
+    lifetimes = (cfg["ttl"]["five_minutes_s"], cfg["ttl"]["one_hour_s"])
+    groups = {
+        "off": {"agents": 0, "requests": 0, "measured_usd": 0.0, "change_usd": 0.0,
+                "would_be_relays": 0, "relay_1h_usd": 0.0, "relay_rewrites_read": 0,
+                "relay_read_usd": 0.0, "notifications_polled": 0, "polls": 0,
+                "notification_usd": 0.0, "poll_usd": 0.0},
+        "on": {"agents": 0, "requests": 0, "measured_usd": 0.0, "change_usd": 0.0,
+               "with_rule": 0, "relays": 0, "relay_1h_usd": 0.0, "requests_cold": 0,
+               "cold_usd": 0.0},
+    }
+    for agent in agents:
+        for on, reqs in embers_parts(agent, since, until, relay_type, ranges):
+            g = groups["on" if on else "off"]
+            g["agents"] += 1
+            g["requests"] += len(reqs)
+            g["measured_usd"] += sum(prices.input_cost(r) for r in reqs)
+            if on:
+                d = without_embers(reqs, prices, agent["type"] == relay_type, lifetimes)
+                g["with_rule"] += agent["embers_rule"]
+                g["relays"] += d["relay"]
+            else:
+                d = with_embers(reqs, prices, lifetimes[1], cfg["ttl"]["chunk_s"], cfg["poll"])
+                g["would_be_relays"] += d["relay"]
+            for key, value in d.items():
+                if key != "relay":
+                    g[key] += value
+    off, on = groups["off"], groups["on"]
+    off["without_usd"] = off["measured_usd"]
+    off["with_usd"] = off["measured_usd"] + off["change_usd"]
+    on["with_usd"] = on["measured_usd"]
+    on["without_usd"] = on["measured_usd"] + on["change_usd"]
+    for g in (off, on):
+        g["saved_usd"] = g["without_usd"] - g["with_usd"]
+        g["saved_share"] = g["saved_usd"] / g["without_usd"] if g["without_usd"] else None
+    return {
+        "since": since.isoformat() if since else None,
+        "until": until.isoformat() if until else None,
+        "detection": "dates" if ranges is not None else "transcript",
+        "embers_on": [[a.isoformat() if a else None, b.isoformat() if b else None]
+                      for a, b in ranges or []],
+        "relay_type": relay_type,
+        "off": off, "on": on,
+    }
+
+
 # --- printing ------------------------------------------------------------------------------------
 
 def _minutes(seconds):
@@ -579,6 +737,71 @@ def render(windows, min_write, breakeven, unknown_models, listing=False, detail=
     return "\n".join(out)
 
 
+def _usd(x):
+    return f"${x:,.2f}"
+
+
+def _saved(g):
+    share = "-" if g["saved_share"] is None else f"{g['saved_share']:.1%}"
+    return f"{_usd(g['saved_usd'])} {share}"
+
+
+def render_savings(s, unknown_models=(), unreadable=0):
+    """The two-by-two table, what makes up each computed cell, and what the model cannot see."""
+    off, on = s["off"], s["on"]
+    since = s["since"][:16].replace("T00:00", "") if s["since"] else "start"
+    until = s["until"][:16].replace("T00:00", "") if s["until"] else "now"
+    if s["detection"] == "dates":
+        ranges = ", ".join(f"{(a or 'start')[:16].replace('T00:00', '')} .. "
+                           f"{(b or 'now')[:16].replace('T00:00', '')}" for a, b in s["embers_on"])
+        how = f"requests that started in {ranges}"
+    else:
+        how = (f"subagents whose transcript holds Embers' waiting rule, or of type "
+               f"{s['relay_type']}")
+    rows = [
+        ("subagent prompt cost", "Embers off", "Embers on"),
+        ("subagents", f"{off['agents']:,}", f"{on['agents']:,}"),
+        ("requests", f"{off['requests']:,}", f"{on['requests']:,}"),
+        ("without Embers", f"{_usd(off['without_usd'])} measured",
+         f"{_usd(on['without_usd'])} computed"),
+        ("with Embers", f"{_usd(off['with_usd'])} computed", f"{_usd(on['with_usd'])} measured"),
+        ("Embers saved", _saved(off), _saved(on)),
+    ]
+    widths = [max(len(r[i]) for r in rows) for i in range(3)]
+    out = [f"window {since} .. {until}; Embers on: {how}", ""]
+    out.extend(f"{a:<{widths[0]}}  {b:>{widths[1]}}  {c:>{widths[2]}}" for a, b, c in rows)
+    out += [
+        "",
+        "Embers off, computed with Embers:",
+        f"  {off['would_be_relays']:,} subagents sent work back would have been the relay: "
+        f"{_usd(off['relay_1h_usd'])} more for 1-hour writes, "
+        f"{_usd(off['relay_read_usd'])} less as {off['relay_rewrites_read']:,} rewrites under "
+        "an hour read their cache",
+        f"  {off['notifications_polled']:,} rewrites on a system notification polled instead: "
+        f"{_usd(off['notification_usd'])} less in rewrites, {_usd(off['poll_usd'])} more for "
+        f"{off['polls']:,} polls",
+        "Embers on, computed without Embers:",
+        f"  {on['relays']:,} relays: {_usd(on['relay_1h_usd'])} less with 5-minute writes, "
+        f"{_usd(on['cold_usd'])} more as {on['requests_cold']:,} requests after a gap of 5 to "
+        "60 minutes rewrite their cache",
+        f"  {on['with_rule']:,} subagents with the waiting rule, left as they ran",
+        "What it cannot see:",
+        "  - rewrites the waiting rule prevented in 5-minute subagents, and cold resumes the guide",
+        "    replaced with fresh agents: both make the real saving larger, so the on column's",
+        "    saving is a lower bound;",
+        "  - the off column's computed cell assumes the relay is picked exactly where work came",
+        "    back, and nowhere else.",
+        "(prompt side only, at list prices; until is exclusive; times are UTC)",
+    ]
+    if unknown_models:
+        out.append("priced at the default model, not in the price file: "
+                   + ", ".join(sorted(unknown_models)))
+    if unreadable:
+        out.append(f"{unreadable:,} transcript{'s' if unreadable != 1 else ''} could not be "
+                   "read, and nothing in them is counted")
+    return "\n".join(out)
+
+
 def _event_text(e):
     if e["kind"] == "tool result":
         flags = [f for f in ("error", "interrupted") if e.get(f)]
@@ -622,6 +845,18 @@ def _date_arg(value):
     return t
 
 
+def _range_arg(value):
+    """FROM..TO, either end may be left out: '2026-11-15..', '..2026-11-20', 'A..B'."""
+    if ".." not in value:
+        raise argparse.ArgumentTypeError(f"not FROM..TO: {value}")
+    a, b = value.split("..", 1)
+    start = _date_arg(a) if a.strip() else None
+    end = _date_arg(b) if b.strip() else None
+    if start and end and end <= start:
+        raise argparse.ArgumentTypeError(f"TO must come after FROM: {value}")
+    return start, end
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawTextHelpFormatter)
     ap.add_argument("--root", default=None,
@@ -638,10 +873,21 @@ def main(argv=None):
     ap.add_argument("--detail", action="store_true",
                     help="like --list, and under each rewrite the previous request's tool calls\n"
                          "and every line in the gap (kinds, tool names and tags only, no content)")
+    ap.add_argument("--savings", action="store_true",
+                    help="print what Embers saved instead: subagent prompt cost without and with\n"
+                         "Embers, measured where it ran that way and computed where it did not")
+    ap.add_argument("--embers-on", action="append", type=_range_arg, metavar="FROM..TO",
+                    help="with --savings: Embers was on for requests started in FROM..TO\n"
+                         "(UTC; either end may be left out; repeatable), in place of reading\n"
+                         "each transcript for the waiting rule")
     ap.add_argument("--json", action="store_true", help="print JSON instead of a table")
     args = ap.parse_args(argv)
     if args.min_write <= 0:
         ap.error("--min-write must be positive")
+    if args.embers_on and not args.savings:
+        ap.error("--embers-on needs --savings")
+    if args.savings and (args.split or args.list or args.detail):
+        ap.error("--savings prints its own table: leave out --split, --list and --detail")
     if args.split and ((args.since and args.split <= args.since)
                        or (args.until and args.split >= args.until)):
         ap.error("--split must fall between --since and --until")
@@ -655,7 +901,18 @@ def main(argv=None):
     lifetimes = (cfg["ttl"]["five_minutes_s"], cfg["ttl"]["one_hour_s"])
     agents = [classify(read_agent(p), args.min_write, lifetimes) for p in paths]
     unreadable = sum(a["unreadable"] for a in agents)
-    bounds = ([(args.since, args.split), (args.split, args.until)] if args.split
+    if args.savings:
+        s = savings(agents, prices, cfg, args.since, args.until, args.relay_type, args.embers_on)
+        if args.json:
+            print(json.dumps({"root": str(root), "min_write": args.min_write,
+                              "unknown_models": sorted(prices.unknown),
+                              "bad_lines": sum(a["bad_lines"] for a in agents),
+                              "unreadable_transcripts": unreadable,
+                              "savings": s}, indent=2))
+        else:
+            print(render_savings(s, prices.unknown, unreadable))
+        return 0
+    bounds =([(args.since, args.split), (args.split, args.until)] if args.split
               else [(args.since, args.until)])
     windows = [summarize(agents, prices, a, b, args.relay_type) for a, b in bounds]
 

@@ -684,5 +684,313 @@ class Command(unittest.TestCase):
         self.assertEqual(self.fx.summary()["windows"][0]["agents"], 1)
 
 
+# --- with and without Embers ---------------------------------------------------------------------
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "hooks"))
+import rules  # noqa: E402
+
+RULE_TEXT = rules.waiting_rule(rules.FALLBACK)  # the text the hook injects
+
+
+def hook_context(text=RULE_TEXT, event="SubagentStart"):
+    """The line Claude Code writes for the context a SubagentStart hook added."""
+    return json.dumps({"type": "attachment", "timestamp": ts(1), "attachment": {
+        "type": "hook_additional_context", "content": [text], "hookName": event,
+        "toolUseID": "t1", "hookEvent": event}})
+
+
+def hook_run(text=RULE_TEXT):
+    """The line Claude Code writes for the hook's run, the rule in its stdout."""
+    stdout = json.dumps({"hookSpecificOutput": {"hookEventName": "SubagentStart",
+                                                "additionalContext": text}})
+    return json.dumps({"type": "attachment", "timestamp": ts(1), "attachment": {
+        "type": "hook_success", "hookName": "SubagentStart:general-purpose",
+        "hookEvent": "SubagentStart", "content": "", "stdout": stdout,
+        "stderr": "embers: general-purpose cache 5m\n", "exitCode": 0}})
+
+
+def relay_agent(resume_after=1800):
+    # a relay: 1-hour writes, its turn ends, work comes back after `resume_after` seconds and
+    # finds the whole prefix (43k) in the cache
+    return [req(10, 0, 0, write_1h=40_000), tool_result(16),
+            req(17, 40_000, 0, write_1h=3_000, tool=False),
+            message(17 + resume_after - 1), req(17 + resume_after, 43_000, 0, write_1h=500)]
+
+
+def notification_agent(gap=501):
+    # the agent ends its turn to wait for a job; the job's notice wakes it `gap` s later, cold
+    return [req(10, 0, 40_000), tool_result(16), req(17, 40_000, 160_000, tool=False),
+            message(17 + gap - 1, text="[SYSTEM NOTIFICATION - NOT USER INPUT] done", meta=True),
+            req(17 + gap, 0, 201_000)]
+
+
+class Detection(unittest.TestCase):
+    def setUp(self):
+        self.fx = Fixture()
+
+    def tearDown(self):
+        self.fx.close()
+
+    def read(self, extra=(), agent_type="general-purpose"):
+        return rw.read_agent(self.fx.agent("a1", warm_agent(), agent_type, extra=extra))
+
+    def test_the_mark_is_the_waiting_rules_first_words(self):
+        self.assertTrue(rules.waiting_rule(rules.FALLBACK).startswith(rw.EMBERS_RULE_MARK))
+
+    def test_the_hooks_added_context_marks_the_agent(self):
+        self.assertTrue(self.read([hook_context()])["embers_rule"])
+        self.assertTrue(self.read([hook_run()])["embers_rule"])
+        self.assertFalse(self.read()["embers_rule"])
+
+    def test_a_brief_quoting_the_rule_does_not(self):
+        brief = json.dumps({"type": "user", "timestamp": ts(1),
+                            "message": {"role": "user", "content": RULE_TEXT}})
+        self.assertFalse(self.read([brief])["embers_rule"])
+
+    def test_another_hook_or_another_text_does_not(self):
+        self.assertFalse(self.read([hook_context(event="SessionStart")])["embers_rule"])
+        self.assertFalse(self.read([hook_context(text="another plugin's rule")])["embers_rule"])
+
+    def test_on_by_the_rule_or_the_relay_type(self):
+        for extra, agent_type, on in (([hook_context()], "general-purpose", True),
+                                      ((), "embers:relay", True),
+                                      ((), "general-purpose", False),
+                                      ((), None, False)):
+            with self.subTest(agent_type=agent_type, rule=bool(extra)):
+                fx = Fixture()
+                try:
+                    agent = rw.read_agent(fx.agent("a1", warm_agent(), agent_type, extra=extra))
+                    parts = rw.embers_parts(agent)
+                    self.assertEqual([(p_on, len(r)) for p_on, r in parts], [(on, 3)])
+                finally:
+                    fx.close()
+        agent = self.read((), "my-relay")
+        self.assertTrue(rw.embers_parts(agent, relay_type="my-relay")[0][0])
+
+    def test_dates_decide_alone_and_split_an_agent(self):
+        # requests at 10, 17 and 24 s; Embers on from 15 s: the first is off, the other two on,
+        # though the transcript holds the rule
+        agent = self.read([hook_context()])
+        parts = rw.embers_parts(agent, ranges=[(T0 + timedelta(seconds=15), None)])
+        self.assertEqual([(on, len(r)) for on, r in parts], [(True, 2), (False, 1)])
+        parts = rw.embers_parts(agent, ranges=[(None, T0), (T0 + timedelta(days=1), None)])
+        self.assertEqual([(on, len(r)) for on, r in parts], [(False, 3)])
+
+    def test_the_window_applies(self):
+        agent = self.read([hook_context()])
+        self.assertEqual(rw.embers_parts(agent, since=T0 + timedelta(seconds=20))[0][1],
+                         agent["requests"][2:])
+        self.assertEqual(rw.embers_parts(agent, until=T0), [])
+
+
+class Counterfactual(unittest.TestCase):
+    """Each rule of the cost model on one agent, priced by hand (Opus 5.5)."""
+
+    def setUp(self):
+        self.fx = Fixture()
+        self.prices = rw.Prices(thresholds.load())
+
+    def tearDown(self):
+        self.fx.close()
+
+    def reqs(self, steps, agent_type="general-purpose"):
+        return rw.classify(rw.read_agent(self.fx.agent("a1", steps, agent_type)))["requests"]
+
+    def with_embers(self, steps):
+        return rw.with_embers(self.reqs(steps), self.prices, 3600, 170,
+                              {"tail_tokens": 300, "output_tokens": 150})
+
+    def test_sent_back_under_the_hour_becomes_a_relay_that_reads(self):
+        # writes 40k + 160k + 201k, all at the 1-hour price; the resume's 200k rewritten
+        # tokens are read instead, its 1k tail written
+        reqs = self.reqs(resume_agent())
+        d = self.with_embers(resume_agent())
+        self.assertTrue(d["relay"])
+        self.assertEqual(d["relay_rewrites_read"], 1)
+        self.assertAlmostEqual(d["relay_1h_usd"], (W1 - W5) * 401_000 * USD)
+        self.assertAlmostEqual(d["relay_read_usd"], (W1 - R) * 200_000 * USD)
+        measured = sum(self.prices.input_cost(r) for r in reqs)
+        self.assertAlmostEqual(measured + d["change_usd"],
+                               (9 + R * (40_000 + 200_000) + W1 * (40_000 + 160_000 + 1_000)) * USD)
+
+    def test_sent_back_past_the_hour_stays_cold_at_the_1_hour_price(self):
+        steps = [req(10, 0, 40_000), tool_result(16), req(17, 40_000, 160_000, tool=False),
+                 message(17 + 3999), req(17 + 4000, 0, 201_000)]
+        d = self.with_embers(steps)
+        self.assertTrue(d["relay"])
+        self.assertEqual(d["relay_rewrites_read"], 0)
+        self.assertAlmostEqual(d["change_usd"], (W1 - W5) * 401_000 * USD)
+
+    def test_a_notification_rewrite_is_polled_instead(self):
+        # gap 501 s: ceil(501 / 170) - 1 = 2 polls, each reading the 200k context and writing
+        # the poll's 300-token tail, with 150 output tokens
+        d = self.with_embers(notification_agent(501))
+        self.assertFalse(d["relay"])
+        self.assertEqual((d["notifications_polled"], d["polls"]), (1, 2))
+        self.assertAlmostEqual(d["notification_usd"], (W5 - R) * 200_000 * USD)
+        self.assertAlmostEqual(d["poll_usd"], 2 * (R * 200_000 + W5 * 300 + O * 150) * USD)
+        self.assertAlmostEqual(d["change_usd"], d["poll_usd"] - d["notification_usd"])
+        self.assertEqual(self.with_embers(notification_agent(100))["polls"], 1)  # at least one
+
+    def test_a_notification_in_an_agent_sent_back_goes_the_relay_way(self):
+        steps = resume_agent() + [
+            message(1300, text="<task-notification>done</task-notification>", meta=True),
+            req(1301, 0, 202_000)]
+        reqs = self.reqs(steps)
+        self.assertEqual([r["cause"] for r in reqs if r["rewrite"]], [rw.RESUME, rw.NOTIFICATION])
+        d = self.with_embers(steps)
+        self.assertTrue(d["relay"])
+        self.assertEqual((d["relay_rewrites_read"], d["notifications_polled"]), (2, 0))
+
+    def test_other_rewrites_stay(self):
+        long_request = [req(10, 0, 40_000), tool_result(16),
+                        req(17, 40_000, 120_000, took=420), tool_result(17 + 420.4),
+                        req(17 + 421, 30_000, 131_000)]
+        for steps in (tool_wait_agent(), long_request, warm_agent()):
+            with self.subTest(causes=[r["cause"] for r in self.reqs(steps) if r["rewrite"]]):
+                self.assertEqual(self.with_embers(steps)["change_usd"], 0.0)
+
+    def test_a_relay_without_embers_rewrites_after_5_minutes(self):
+        reqs = self.reqs(relay_agent(1800), "embers:relay")
+        d = rw.without_embers(reqs, self.prices, True)
+        self.assertEqual(d["requests_cold"], 1)
+        self.assertAlmostEqual(d["relay_1h_usd"], (W1 - W5) * 43_500 * USD)
+        self.assertAlmostEqual(d["cold_usd"], (W5 - R) * 43_000 * USD)
+        measured = sum(self.prices.input_cost(r) for r in reqs)
+        self.assertAlmostEqual(measured + d["change_usd"],
+                               (9 + R * 40_000 + W5 * (43_500 + 43_000)) * USD)
+
+    def test_a_relay_gap_under_5_minutes_or_past_the_hour_changes_only_the_write_price(self):
+        for gap in (200, 300, 3600, 4000):
+            with self.subTest(gap=gap):
+                fx = Fixture()
+                try:
+                    reqs = rw.classify(rw.read_agent(
+                        fx.agent("r1", relay_agent(gap), "embers:relay")))["requests"]
+                    d = rw.without_embers(reqs, self.prices, True)
+                    self.assertEqual(d["requests_cold"], 0)
+                    self.assertAlmostEqual(d["change_usd"], -(W1 - W5) * 43_500 * USD)
+                finally:
+                    fx.close()
+
+    def test_a_relay_that_went_cold_anyway_is_not_counted_twice(self):
+        steps = [req(10, 0, 0, write_1h=40_000), tool_result(16),
+                 req(17, 40_000, 0, write_1h=160_000, tool=False),
+                 message(17 + 1799), req(17 + 1800, 0, 0, write_1h=201_000)]
+        d = rw.without_embers(self.reqs(steps, "embers:relay"), self.prices, True)
+        self.assertEqual(d["requests_cold"], 0)
+
+    def test_a_5_minute_agent_with_embers_is_left_as_it_ran(self):
+        d = rw.without_embers(self.reqs(notification_agent()), self.prices, False)
+        self.assertEqual((d["change_usd"], d["requests_cold"]), (0.0, 0))
+
+
+class SavingsTable(unittest.TestCase):
+    def setUp(self):
+        self.fx = Fixture()
+        self.prices = rw.Prices(thresholds.load())
+
+    def tearDown(self):
+        self.fx.close()
+
+    def cost(self, agent_id):
+        path = next(self.fx.root.glob(f"**/agent-{agent_id}.jsonl"))
+        return sum(self.prices.input_cost(r)
+                   for r in rw.classify(rw.read_agent(path))["requests"])
+
+    def two_groups(self):
+        # off: an agent sent work back and a warm one; on: a relay and a 5-minute agent with
+        # the rule, a day later
+        self.fx.agent("off1", resume_agent())
+        self.fx.agent("off2", warm_agent())
+        day = 86_400
+        self.fx.agent("on1", [dict(s, at=s["at"] + day) for s in relay_agent(1800)],
+                      "embers:relay")
+        self.fx.agent("on2", [dict(s, at=s["at"] + day) for s in tool_wait_agent()],
+                      extra=[hook_context()])
+
+    def test_the_four_cells_by_hand(self):
+        self.two_groups()
+        s = self.fx.summary("--savings")["savings"]
+        off, on = s["off"], s["on"]
+        self.assertEqual(s["detection"], "transcript")
+        self.assertEqual((off["agents"], on["agents"]), (2, 2))
+        self.assertEqual((off["would_be_relays"], on["relays"], on["with_rule"]), (1, 1, 1))
+        off_measured = self.cost("off1") + self.cost("off2")
+        on_measured = self.cost("on1") + self.cost("on2")
+        off_change = ((W1 - W5) * 401_000 - (W1 - R) * 200_000) * USD
+        on_change = ((W5 - R) * 43_000 - (W1 - W5) * 43_500) * USD
+        self.assertAlmostEqual(off["without_usd"], off_measured)
+        self.assertAlmostEqual(off["with_usd"], off_measured + off_change)
+        self.assertAlmostEqual(on["with_usd"], on_measured)
+        self.assertAlmostEqual(on["without_usd"], on_measured + on_change)
+        for g in (off, on):
+            self.assertAlmostEqual(g["saved_usd"], g["without_usd"] - g["with_usd"])
+            self.assertAlmostEqual(g["saved_share"], g["saved_usd"] / g["without_usd"])
+
+    def test_the_table_prints_the_json_figures(self):
+        self.two_groups()
+        s = self.fx.summary("--savings")["savings"]
+        code, out = self.fx.run("--savings")
+        self.assertEqual(code, 0)
+        lines = out.splitlines()
+
+        def row(name):
+            return next(line for line in lines if line.startswith(name))[len(name):].split()
+
+        usd = lambda x: f"${x:,.2f}"  # noqa: E731
+        self.assertEqual(row("without Embers"), [usd(s["off"]["without_usd"]), "measured",
+                                                 usd(s["on"]["without_usd"]), "computed"])
+        self.assertEqual(row("with Embers"), [usd(s["off"]["with_usd"]), "computed",
+                                              usd(s["on"]["with_usd"]), "measured"])
+        self.assertEqual(row("Embers saved"),
+                         [usd(s["off"]["saved_usd"]), f"{s['off']['saved_share']:.1%}",
+                          usd(s["on"]["saved_usd"]), f"{s['on']['saved_share']:.1%}"])
+        self.assertEqual(row("subagents"), ["2", "2"])
+        self.assertIn("What it cannot see", out)
+        self.assertIn("lower bound", out)
+
+    def test_dates_in_place_of_the_transcript(self):
+        self.two_groups()
+        day1 = (T0 + timedelta(days=1)).date().isoformat()
+        by_date = self.fx.summary("--savings", "--embers-on", f"{day1}..")["savings"]
+        by_rule = self.fx.summary("--savings")["savings"]
+        self.assertEqual(by_date["detection"], "dates")
+        for key in ("without_usd", "with_usd"):
+            for group in ("off", "on"):
+                self.assertAlmostEqual(by_date[group][key], by_rule[group][key])
+        # all on from the start: the off column is empty
+        s = self.fx.summary("--savings", "--embers-on", "..2030-12-31")["savings"]
+        self.assertEqual((s["off"]["agents"], s["on"]["agents"]), (0, 4))
+        self.assertIsNone(s["off"]["saved_share"])
+        code, out = self.fx.run("--savings", "--embers-on", "..2030-12-31")
+        self.assertEqual(code, 0)
+        self.assertIn("$0.00 -", out)
+
+    def test_repeated_ranges_and_the_window(self):
+        self.two_groups()
+        day1 = (T0 + timedelta(days=1)).date().isoformat()
+        day2 = (T0 + timedelta(days=2)).date().isoformat()
+        s = self.fx.summary("--savings", "--embers-on", f"..{T0.date().isoformat()}",
+                            "--embers-on", f"{day1}..{day2}", "--since", day1)["savings"]
+        self.assertEqual((s["off"]["agents"], s["on"]["agents"]), (0, 2))
+        self.assertEqual(len(s["embers_on"]), 2)
+
+    def test_options_that_do_not_go_together_are_refused(self):
+        for args in (["--embers-on", "2030-01-01.."], ["--savings", "--split", "2030-01-08"],
+                     ["--savings", "--list"], ["--savings", "--embers-on", "2030-01-01"],
+                     ["--savings", "--embers-on", "2030-01-08..2030-01-01"],
+                     ["--savings", "--embers-on", "soon.."]):
+            with self.subTest(args=args), contextlib.redirect_stderr(io.StringIO()), \
+                    self.assertRaises(SystemExit):
+                rw.main(["--root", str(self.fx.root), *args])
+
+    def test_an_empty_root_still_prints_the_table(self):
+        with contextlib.redirect_stderr(io.StringIO()):
+            code, out = self.fx.run("--savings")
+        self.assertEqual(code, 0)
+        self.assertIn("Embers saved", out)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -94,6 +94,71 @@ not a rewrite; the table counts those apart, as *large writes, not cold*. For ea
 - A before and after compares two different stretches of work. Fewer rewrites after may also
   mean fewer subagents, or shorter waits; read the requests and the gaps beside the count.
 
+### Did Embers save you money?
+
+`--savings` prints a different table: what your subagents' prompts cost without Embers and with
+it, each group measured the way it ran and computed the other way.
+
+```
+python3 tools/rewrites.py --since 2026-11-01 --savings                           # by transcript
+python3 tools/rewrites.py --since 2026-11-01 --savings --embers-on 2026-11-15..  # by date
+```
+
+**Which subagents had Embers.** A subagent counts as *Embers on* when its transcript holds the
+waiting rule that Embers' `SubagentStart` hook injects, or its type is the relay
+(`--relay-type`); any other subagent counts as *Embers off*. A 1-hour agent of your own gets no
+rule, so it counts as off, and so does a subagent in which the hook did not run, whatever the
+date. When your transcripts predate the hook's current wording, or you switched Embers on and off,
+name the dates instead with `--embers-on FROM..TO` (UTC, repeatable, either end may be left out).
+Each request then counts by when it started, whatever its transcript holds, and an agent that
+spans a boundary counts on both sides. `--since` and `--until` set the window as usual;
+`--split`, `--list` and `--detail` do not go with `--savings`.
+
+**The table.** One column per group, one row per way of running:
+
+| Subagent prompt cost | Embers off | Embers on |
+|---|---|---|
+| without Embers | measured | computed |
+| with Embers | computed | measured |
+| Embers saved | $ and % | $ and % |
+
+A measured cell is the prompt side of every request in the window as it ran: uncached input,
+cache reads and cache writes, at list prices from [config/prices.toml](../config/prices.toml),
+each request at its own model. A computed cell prices the same requests the other way:
+
+- *Off, computed with Embers.* A subagent with a cold rewrite on a resume would have been the
+  relay. All its writes are priced at the 1-hour write, and each of its rewrites less than an
+  hour after the previous request's start reads the tokens it wrote again; its new tail is still
+  written. Its rewrites past the hour stay. In any other subagent, a rewrite on a system
+  notification is replaced by the waiting rule's polls: one per `chunk_s` of the gap (170 s),
+  less the request that ends the wait, at least one. Each poll reads the context and writes the
+  `[poll]` tail; its output is counted too. Every other request stays as it ran, a rewrite after
+  a long request included.
+- *On, computed without Embers.* The relay's 1-hour writes are priced at the 5-minute write.
+  Each relay request that started between 5 minutes and an hour after the previous request's
+  start, and read its cache, would have found a 5-minute cache gone: what it read is priced as a
+  5-minute write. Subagents with the waiting rule are left as they ran.
+
+Under the table, a few lines give the parts of each computed cell: the subagents that would
+have been the relay, with what their 1-hour writes add and their warm resumes save; the
+notifications polled instead; the relays, with what 5-minute writes save and what their late
+requests would have cost cold. `--json` carries the same figures and parts.
+
+**How to read it.**
+
+- Read each column's *Embers saved* row on its own. The two columns are different subagents
+  doing different work, so their costs are not comparable with each other.
+- The on column's saving is a lower bound. It cannot see the rewrites the waiting rule
+  prevented in 5-minute subagents, since a subagent that kept its cache warm shows no rewrite to
+  price, nor the cold resumes the guide replaced with fresh agents. Both make the real saving
+  larger.
+- The off column's computed cell assumes the relay is picked exactly where work comes back, and
+  nowhere else. A relay picked for one-shot work pays the 1-hour write for nothing, so the real
+  saving there may be smaller.
+- A negative saving means Embers cost that group more than it saved.
+- Prompt side only, at list prices; the polls' output is the one output cost counted. On a
+  subscription, the dollars stand for weight against your usage limit.
+
 ## Recompute the thresholds
 
 1. Change a number in [config/prices.toml](../config/prices.toml); each entry says where it comes
