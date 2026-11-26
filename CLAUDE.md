@@ -17,7 +17,8 @@ paths, names, transcripts or account details). Only the owner pushes.
 - `config/prices.toml`: every number, with its source. `tools/thresholds.py` computes from it,
   and `rule_numbers()` feeds the texts.
 - `tools/rewrites.py`: counts and prices cold rewrites in a user's own subagent transcripts, for
-  a before/after measurement; reads only, never imported by the hooks.
+  a before/after measurement, and with `--savings` what Embers saved; reads only, never imported
+  by the hooks.
 - `docs/`: `math.md` derives every number; `design.md` holds the cache facts, how each hook
   decides, the design choices and the sources; `limits.md` every known limit; `measuring.md` the
   measured case, how to run `tools/rewrites.py`, and how to recompute the thresholds. The README
