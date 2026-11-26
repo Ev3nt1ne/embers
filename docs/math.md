@@ -1,7 +1,7 @@
 ---
 title: The cost math behind Embers' rules
 created: 2026-11-19
-updated: 2026-11-19T10:26Z
+updated: 2026-11-26
 ---
 
 # The cost math behind Embers' rules
@@ -238,6 +238,86 @@ $1.44, so the ruling pays about $1.30 for the simplicity. [design.md](design.md#
 **What would change it:** r above all (it sets n*), the chunk length, and how terse the poll
 turns are.
 
+## 4. What Embers saved
+
+`tools/rewrites.py --savings` (code: `with_embers()` and `without_embers()`) prices one group of
+subagents as it ran and computes what the same requests would have cost the other way. This
+section derives the computed cells; [measuring.md](measuring.md#did-embers-save-you-money) says how
+to run it.
+
+**Notation.** For a request: u its uncached input, R what it read from the cache, W5 and W1 what
+it wrote to the 5-minute and the 1-hour cache, g its gap from the previous request's start. For a
+cold rewrite: X, the tokens written again, the part of its write that the previous request had
+cached. Its new tail, which a warm request writes too, is not in X. Costs are in base-input
+tokens of the request's own model, as above; the tool multiplies each request by its model's
+base price.
+
+**Measured cell.** The prompt side of every request in the group, as it ran:
+
+```
+M = Σ (u + r R + w5 W5 + w1 W1)
+```
+
+**Without Embers, computed with it (inference; the off column).** Each subagent changes in one of
+two ways, or not at all.
+
+- *A subagent with a cold rewrite on a resume would have been the relay.* Every write moves to
+  the 1-hour price, and each rewrite under the hour reads its X instead of writing it. With W the
+  agent's 5-minute writes and X< the tokens written again by its rewrites under an hour:
+
+  ```
+  Δ = (w1 − w5) W − (w1 − r) X<  =  (w1 − w5)(W − X<) − (w5 − r) X<
+  ```
+
+  The second form is section 2's comparison on the agent's real gaps: the premium on its
+  ordinary writes against the rewrites it avoids. A rewrite past the hour stays, at w1, and pays
+  the premium too.
+- *In any other subagent, a rewrite on a system notification is replaced by the waiting rule's
+  polls.* A wait of g seconds, polled every T = 170 s, takes ⌈g/T⌉ chunks; the request that ends
+  the last one is the request that was the rewrite, now reading its cache, so it is no extra
+  poll. Each poll costs section 3's `r C + w5 t + o y`, with C taken as X:
+
+  ```
+  n = max(1, ⌈g/T⌉ − 1)        Δ = n (r X + w5 t + o y) − (w5 − r) X
+  ```
+
+- *Everything else stays as it ran.* A rewrite after a long request cannot be avoided on a
+  5-minute cache. A rewrite after a tool wait might have been avoided by the waiting rule, so
+  leaving it in understates the saving.
+
+The assumption that carries this column: the relay is picked exactly for the subagents that were
+sent work back, and for no other. A relay picked for one-shot work pays `(w1 − w5) W` for
+nothing.
+
+**With Embers, computed without it (inference; the on column).** Only relays change. Their 1-hour
+writes move to the 5-minute price, and each request that came between the two lifetimes after
+the previous request's start, was not itself a rewrite, and read its cache, would have found a
+5-minute cache gone. What it read is what it would have written again:
+
+```
+Δ = (w5 − r) Σ R  −  (w1 − w5) W1        the sum over relay requests with 300 s < g < 3600 s
+```
+
+Subagents with the waiting rule stay as they ran: a rewrite the rule prevented leaves nothing in
+the transcript to price. Nor can the transcripts show a cold resume the guide replaced with a
+fresh agent. Both make this column's saving a lower bound. The other way round, the column
+counts each late return to a relay as a cold resume of the same agent; a main session that would
+have started a fresh agent instead (section 1) would have paid less, and the relay saved less.
+
+**Saved.** Per column, without minus with: `−Δ` in the off column, `Δ` in the on column; the
+share is the saving over the cost without Embers. The two columns are different subagents doing
+different work, so each is read on its own.
+
+**The ceiling.** No way of running can save more than every rewrite finding its cache warm at no
+premium: `Σ (w5 − r) X` over the rewrites, the tool's *avoidable had each been warm*. In the
+author's two weeks before Embers that was $52.37 of $494.66 of subagent prompt cost, 10.6%
+(fact, the tool's output). The off column's computed saving, $33.95, is about two thirds of it
+(inference, from the figures in [measuring.md](measuring.md#the-first-week-with-embers)).
+
+**What would change it:** the write prices, which set the relay's premium against what it saves;
+how well the main session picks the relay; and, for the polls, the same r, T, t and y as
+section 3.
+
 ## The author's measured case
 
 **The data (fact; the author's own study of their transcripts, not published).** Over two weeks,
@@ -278,13 +358,15 @@ agent's first, that writes at least 100k tokens to the cache **and** reads at le
 than the previous request had cached (its read plus its write). The second half of the test
 leaves out a large tool result read into a warm cache; this window had one such write. The gap
 runs from the previous request's start, which is when the cache's clock starts. It found 24
-rewrites of 8.5M tokens:
+rewrites, 8.1M tokens written again (8,095,708, as
+[tools/rewrites.py](../tools/rewrites.py) counts them, recounted 2026-11-26). The requests wrote
+8.5M in all; the difference is the new tail each one added, which a warm request writes too:
 
-| What came before | Rewrites | Tokens | Gap from the previous request's start |
+| What came before | Rewrites | Tokens written again | Gap from the previous request's start |
 |---|---|---|---|
 | Work sent back: the agent handed back, then its manager sent it more work | 13 | 4.9M | 6 to 117 min |
 | A system notification woke an agent that had ended its turn | 4 | 1.4M | 1 to 11 min |
-| One response ran 5 to 8 minutes, and the next request started at once | 7 | 2.2M | 5 to 8 min |
+| One response ran 5 to 8 minutes, and the next request started at once | 7 | 1.9M | 5 to 8 min |
 | A tool result that came back after a wait | 0 | | |
 
 - **Work sent back.** The manager's message arrived within 20 s before each rewrite. The agent's
@@ -299,7 +381,7 @@ rewrites of 8.5M tokens:
   lifetime counts from a request's start, so such a response leaves its own cache expired. The
   agent then went on within 6 s.
 
-What this changes (inference). Work sent back is the larger part, 58% of the rewritten tokens,
+What this changes (inference). Work sent back is the larger part, 60% of the rewritten tokens,
 but not the whole. A subagent blocked on a long tool, the case public reports show at scale, had
 no instance here. The long-response case escapes the waiting rule and the send-back guide, since
 the agent never waits and never finishes; a 1-hour cache covers it. The 60 s margin in the warm

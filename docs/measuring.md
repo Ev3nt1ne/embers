@@ -8,25 +8,121 @@ the formulas.
 
 A measured case, from one user's two weeks of ordinary work: 117 subagents rewrote 19 cold
 caches of 150k to 620k tokens, about 7.1M tokens in all. At Opus 5.5 list prices that is about
-$35.50, of which about $34 would have been avoided had each found its cache warm. A recount of
-the same transcripts (2026-11-05 to 2026-11-19) asked what came before each rewrite. It
-counted as a cold rewrite any subagent request that wrote at least 100k tokens to the cache while
-reading at least 100k fewer than the request before it had cached, and found 24 in 134 subagents,
-about 8.5M tokens:
+$35.50, of which about $34 would have been avoided had each found its cache warm. A later
+recount covered the same two weeks (2026-11-05 to 2026-11-19 13:00 UTC) with a different
+criterion, so its counts differ from the study's: it counted as a cold rewrite any subagent
+request that wrote at least 100k tokens to the cache while reading at least 100k fewer than the
+request before it had cached, and asked what came before each one. It found 24 in 134
+subagents, about 8.1M tokens written again (8.5M written in all, the new tails included):
 
 - 13 (4.9M tokens) were work sent back, 6 to 117 minutes after the agent's previous request began (a little
   less from its hand-back);
 - 4 (1.4M) came when an agent that had ended its turn was woken by a system notification, 1 to
   11 minutes later;
-- 7 (2.2M) followed a single response of 28k to 63k output tokens that ran 5 to 8 minutes.
+- 7 (1.9M) followed a single response of 28k to 63k output tokens that ran 5 to 8 minutes.
 
-None followed a wait on a tool result. Public reports show the first pattern at larger scale: in
-one, 190 rewrites of over 100k tokens each followed test suites that ran 10 to 15 minutes and
+None followed a wait on a tool result. Public reports show that pattern, a subagent blocked on a
+long tool, at larger scale: in one, 190 rewrites of over 100k tokens each followed test suites that ran 10 to 15 minutes and
 drained 54% of a weekly limit in under a day
 ([#103309](https://github.com/anthropics/claude-code/issues/103309)).
 
 The pricing and the three recounts in full are in
 [math.md, the author's measured case](math.md#the-authors-measured-case).
+
+### The first week with Embers
+
+The same user installed Embers on 2026-11-19 at about 12:30 UTC. The tool compares the week
+that followed with the two weeks of the recount, on the recount's criterion:
+
+```
+python3 tools/rewrites.py --since 2026-11-05 --split 2026-11-19T13:00Z --until 2026-11-26T13:00Z
+```
+
+| | Before: 2026-11-05 to 11-19 13:00 | After: 11-19 13:00 to 11-26 13:00 |
+|---|---|---|
+| subagents seen | 134 | 146 |
+| requests | 7,633 | 6,410 |
+| cold rewrites | 24 | 7 |
+| on a resume | 13 | 2 |
+| on a system notification | 4 | 0 |
+| after a long request | 7 | 0 |
+| after a tool wait | 0 | 5 |
+| tokens rewritten | 8,095,708 | 966,717 |
+| rewrites at list price | $53.99 | $4.12 |
+| cache writes, all requests | 34,134,199 | 25,233,260 |
+| of which 1-hour | 38,021 | 7,532,275 |
+| prompt cost, all requests | $494.66 | $310.91 |
+| rewrites, share of writes | 23.7% | 3.8% |
+| rewrites, share of prompt cost | 10.9% | 1.3% |
+| relay agents | 1 | 24 |
+| relay requests, all writing to the 1-hour cache | 3 | 2,203 |
+
+The before window is two weeks and the after window one, so compare the shares, not the totals.
+The one relay before the split is the install day's test.
+
+The seven rewrites after:
+
+- **2 were work sent back, both small**: a 5-minute agent of 106k tokens resumed 6.4 minutes
+  after its previous request began, and a relay of 161k resumed after 94.7 minutes, past its
+  hour ($1.82 together). Before, a rewrite averaged 337k tokens.
+- **3 were waits chained in one response** (480k tokens, $1.20). One agent followed the waiting
+  rule's form, with each Bash call under 170 seconds, but made two or three of them in one
+  response. Claude Code runs them one after another, so the next request came 5.2 to 7.9
+  minutes after the previous one began. The rule now asks for one wait per response.
+- **2 were a permission prompt** (220k tokens, $1.10). One agent's command waited about 13
+  minutes on a prompt, twice, before anyone answered it: see
+  [limits.md](limits.md). The tool counts these as tool waits, since a tool result came last;
+  the result line's `permissionDecision` shows that a person decided.
+
+None came on a system notification or after a long response, the two kinds the relay and the
+waiting rule were built for besides work sent back.
+
+**The relay.** 24 relays ran 2,203 requests, every one writing to the 1-hour cache: 7,532,275
+tokens, $22.60 more than the same writes at 5 minutes. 25 of their requests, in 14 relays, came
+5 to 43 minutes after the previous request began, and every one read the whole prefix the
+previous request had cached. On a 5-minute cache each would have written that prefix again:
+$32.81. The relay saved $10.21 net in the week. That counts each late return as a cold resume
+of the same agent, which is what the main session did without Embers (13 times in the two weeks
+before). A main session that started fresh agents instead would have saved less on those
+returns, and the relay's margin would shrink (inference).
+
+**What Embers saved**, by date:
+
+```
+python3 tools/rewrites.py --since 2026-11-05 --until 2026-11-26T13:00Z --savings --embers-on 2026-11-19T13:00Z..
+```
+
+| Subagent prompt cost | Embers off: the two weeks before | Embers on: the week after |
+|---|---|---|
+| subagents | 134 | 146 |
+| requests | 7,633 | 6,410 |
+| without Embers | $494.66 measured | $321.12 computed |
+| with Embers | $460.71 computed | $310.91 measured |
+| Embers saved | $33.95, 6.9% | $10.21, 3.2% |
+
+How to read it:
+
+- **Each column on its own.** The off column is the two weeks before, re-priced as if Embers had
+  been installed: the 7 subagents that were sent work back become relays, which costs $45.46
+  more in 1-hour writes, and 22 of their rewrites, all under an hour, read their cache instead
+  ($79.41 less). The 4 notification rewrites were all in those 7 agents, so no polls are
+  computed. The on column is the week after, re-priced as if Embers had not been installed: the
+  24 relays lose their premium ($22.60 less) and the 25 late requests above rewrite their cache
+  ($32.81 more). The 113 subagents with the waiting rule are left as they ran.
+- **The on column's 3.2% is a lower bound.** The tool cannot see the rewrites the waiting rule
+  prevented, nor the cold resumes the guide replaced with fresh agents.
+- **The off column's 6.9% assumes the relay is picked exactly where work comes back.** In the
+  week after, 8 of the 24 relays never had a gap over 240 seconds: one-shot work, which pays the
+  1-hour write for nothing.
+- **The ceiling was low.** Before Embers, all the rewrites together were 10.9% of subagent prompt
+  cost, and had every one found its cache warm at no premium, $52.37 (10.6%) would have been
+  saved: the tool's *avoidable had each been warm* row.
+
+Sorted by transcript instead of by date (no `--embers-on`), each column moves by about 1%, and
+the savings stay at $33.95 and $10.24: 3 subagents that ran before the split, tests on the
+install day, held the rule, and 9 after it ran without the hook. Five of those were in a session started
+the day before the install; four were `web-fetch` agents, which get no hook (see
+[limits.md](limits.md)).
 
 ## Measure your own
 
@@ -98,6 +194,8 @@ not a rewrite; the table counts those apart, as *large writes, not cold*. For ea
 
 `--savings` prints a different table: what your subagents' prompts cost without Embers and with
 it, each group measured the way it ran and computed the other way.
+[math.md](math.md#4-what-embers-saved) derives the computed cells, and
+[the first week with Embers](#the-first-week-with-embers) reads one such table.
 
 ```
 python3 tools/rewrites.py --since 2026-11-01 --savings                           # by transcript

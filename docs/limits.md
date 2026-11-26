@@ -19,12 +19,21 @@ limits a user is most likely to meet; this page has them all.
   relay's 1-hour cache covers a prompt answered within the hour. In one user's first week with
   Embers, an agent waited about 13 minutes on a prompt, twice (two rewrites). Keep commands that
   ask out of subagents' work, or answer their prompts promptly.
+- **`web-fetch` subagents get no hook.** In one user's transcripts of the week since installing
+  Embers, none of the 5 subagents of Claude Code's `web-fetch` type had a `SubagentStart` hook
+  line, while all 146 subagents of other types in sessions that loaded Embers had one, some of
+  them started in the same sessions minutes apart. So a `web-fetch` agent never gets the waiting
+  rule. Its only tool is WebFetch, with no Bash to wait in, so the rule could not apply to it
+  anyway; the main session's guide still covers sending it more work. Why Claude Code skips the
+  hook for this type is not known.
 - **Resumes inside the lifetime may still miss.** Open reports show a resumed or woken subagent
   rewriting its context inside a 1-hour lifetime
   ([#87215](https://github.com/anthropics/claude-code/issues/87215),
   [#94728](https://github.com/anthropics/claude-code/issues/94728)); the second ties it to the
-  agent's thinking blocks missing from the resumed history. Untested on the current
-  version. To check the relay, read its transcript: `ephemeral_1h_input_tokens` should be above
+  agent's thinking blocks missing from the resumed history. In one user's first week with
+  Embers (Claude Code 2.1.329 to 2.1.332), none showed: 25 relay requests that came 5 to 43
+  minutes after the previous one's start, 17 of them resumes, all read the whole prefix the
+  previous request had cached. To check the relay, read its transcript: `ephemeral_1h_input_tokens` should be above
   zero, and a resume 10 to 50 minutes later should show `cache_read_input_tokens` close to the
   previous context size.
 - **What the hook cannot see.** A `--settings` flag, `--agents` JSON that shadows an agent file,

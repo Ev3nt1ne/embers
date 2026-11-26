@@ -34,9 +34,11 @@ cache expires after a gap with no requests, and three patterns blow through it:
 
 In one user's two weeks of ordinary work, 117 subagents rewrote 19 cold caches of 150k to 620k
 tokens, about 7.1M tokens in all: about $35.50 at Opus 5.5 list prices, of which about $34 would
-have been avoided had each found its cache warm. A later recount of that user's transcripts
-found 24 cold rewrites: 13 were work sent back, 4 followed a system notification, 7 a single
-response that ran 5 to 8 minutes, and none a wait on a tool result. In a public report, 190
+have been avoided had each found its cache warm. A later recount of the same two weeks, with a
+different criterion for a cold rewrite, found 24: 13 were work sent back, 4 followed a system
+notification, 7 a single response that ran 5 to 8 minutes, and none a wait on a tool result. In
+[the first week with Embers](docs/measuring.md#the-first-week-with-embers) the same count found
+7, with 3.8% of cache writes rewritten against 23.7% before. In a public report, 190
 rewrites of over 100k tokens each followed test suites that ran 10 to 15 minutes and drained 54%
 of a weekly limit in under a day
 ([#103309](https://github.com/anthropics/claude-code/issues/103309)). The method and the full
@@ -110,7 +112,8 @@ claude plugin marketplace add Ev3nt1ne/embers
 claude plugin install embers@embers
 ```
 
-Claude Code clones the repository over SSH, and over HTTPS when SSH fails. To update, run
+Embers takes effect in sessions started after the install. Claude Code clones the repository
+over SSH, and over HTTPS when SSH fails. To update, run
 `claude plugin marketplace update embers`, then `claude plugin uninstall embers@embers` and
 install again: `claude plugin update embers@embers` installs a newer commit only when the
 version in `.claude-plugin/plugin.json` has changed. To uninstall, run
