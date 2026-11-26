@@ -842,6 +842,39 @@ class Counterfactual(unittest.TestCase):
         self.assertTrue(d["relay"])
         self.assertEqual((d["relay_rewrites_read"], d["notifications_polled"]), (2, 0))
 
+    def test_only_a_cold_resume_makes_a_relay(self):
+        # the agent ends its turn and is sent more work 2 minutes later, which reads warm
+        steps = [req(10, 0, 40_000), tool_result(16), req(17, 40_000, 160_000, tool=False),
+                 message(17 + 120), req(17 + 121, 200_000, 1_000)]
+        reqs = self.reqs(steps)
+        self.assertEqual((reqs[-1]["cause"], reqs[-1]["rewrite"]), (rw.RESUME, False))
+        d = self.with_embers(steps)
+        self.assertFalse(d["relay"])
+        self.assertEqual(d["change_usd"], 0.0)
+
+    def test_a_1_hour_agent_is_left_as_it_ran(self):
+        # an agent of the user's own with a 1-hour cache: it ends its turn on a 2-hour job, and
+        # the job's notice finds 300k cold; then it is sent work back past the hour, cold again.
+        # Embers injects nothing into it and it has the relay's cache already: no change.
+        steps = [req(10, 0, 0, write_1h=40_000), tool_result(16),
+                 req(17, 40_000, 0, write_1h=260_000, tool=False),
+                 message(17 + 7199, text="<task-notification>done</task-notification>",
+                         meta=True),
+                 req(17 + 7200, 0, 0, write_1h=301_000, tool=False),
+                 message(17 + 7200 + 3999), req(17 + 7200 + 4000, 0, 0, write_1h=302_000)]
+        reqs = self.reqs(steps)
+        self.assertEqual([r["cause"] for r in reqs if r["rewrite"]],
+                         [rw.NOTIFICATION, rw.RESUME])
+        d = rw.with_embers(reqs, self.prices, 3600, 170,
+                           {"tail_tokens": 300, "output_tokens": 150}, one_hour=True)
+        self.assertEqual((d["relay"], d["one_hour"], d["polls"]), (False, True, 0))
+        self.assertEqual(d["change_usd"], 0.0)
+        self.fx.agent("own1h", steps, "my-1h-agent")
+        off = self.fx.summary("--savings")["savings"]["off"]
+        self.assertEqual((off["agents"], off["one_hour_agents"]), (2, 2))
+        self.assertEqual((off["would_be_relays"], off["notifications_polled"]), (0, 0))
+        self.assertEqual(off["change_usd"], 0.0)
+
     def test_other_rewrites_stay(self):
         long_request = [req(10, 0, 40_000), tool_result(16),
                         req(17, 40_000, 120_000, took=420), tool_result(17 + 420.4),
@@ -948,7 +981,59 @@ class SavingsTable(unittest.TestCase):
                           usd(s["on"]["saved_usd"]), f"{s['on']['saved_share']:.1%}"])
         self.assertEqual(row("subagents"), ["2", "2"])
         self.assertIn("What it cannot see", out)
-        self.assertIn("lower bound", out)
+        text = " ".join(line.strip() for line in lines)
+        self.assertIn("cold resumes the guide replaced with fresh agents, make the real saving "
+                      "larger", text)
+        self.assertIn("polls the waiting rule kept up past the break-even", text)
+        self.assertIn("make it smaller", text)
+        self.assertNotIn("lower bound", out)
+
+    def test_the_part_lines_print_the_json_figures(self):
+        # every part nonzero and distinct: a would-be relay, a notification polled, a relay with
+        # a late request, a 5-minute agent with the rule
+        self.two_groups()
+        self.fx.agent("off3", notification_agent(1001))
+        s = self.fx.summary("--savings")["savings"]
+        off, on = s["off"], s["on"]
+        _, out = self.fx.run("--savings")
+        usd = lambda x: f"${x:,.2f}"  # noqa: E731
+        expected = [
+            f"  {off['would_be_relays']} subagents sent work back would have been the relay: "
+            f"{usd(off['relay_1h_usd'])} more for 1-hour writes, {usd(off['relay_read_usd'])} "
+            f"less as {off['relay_rewrites_read']} rewrites under an hour read their cache",
+            f"  {off['notifications_polled']} rewrites on a system notification polled instead: "
+            f"{usd(off['notification_usd'])} less in rewrites, {usd(off['poll_usd'])} more for "
+            f"{off['polls']} polls",
+            f"  {on['relays']} relays: {usd(on['relay_1h_usd'])} less with 5-minute writes, "
+            f"{usd(on['cold_usd'])} more as {on['requests_cold']} requests after a gap of 5 to "
+            "60 minutes rewrite their cache",
+            f"  {on['with_rule']} subagents with the waiting rule, left as they ran"]
+        lines = out.splitlines()
+        for line in expected:
+            with self.subTest(line=line[:40]):
+                self.assertIn(line, lines)
+        # the figures the lines carry are all different, so a swapped key shows
+        figures = [usd(off[k]) for k in ("relay_1h_usd", "relay_read_usd", "notification_usd",
+                                         "poll_usd")] + [usd(on[k]) for k in ("relay_1h_usd",
+                                                                              "cold_usd")]
+        self.assertEqual(len(set(figures)), len(figures))
+        counts = [off[k] for k in ("would_be_relays", "relay_rewrites_read",
+                                   "notifications_polled", "polls")]
+        self.assertEqual(counts, [1, 1, 1, 5])
+        self.assertEqual((on["relays"], on["requests_cold"], on["with_rule"]), (1, 1, 1))
+        self.assertNotIn("by date alone", out)
+        self.assertNotIn("already on a 1-hour cache", out)
+
+    def test_date_mode_accounts_for_subagents_without_the_rule(self):
+        # on by date: the relay, the agent with the rule, and two agents without it
+        self.two_groups()
+        s = self.fx.summary("--savings", "--embers-on", "..2030-12-31")["savings"]["on"]
+        self.assertEqual((s["agents"], s["relays"], s["with_rule"], s["without_rule"]),
+                         (4, 1, 1, 2))
+        self.assertEqual(s["relays"] + s["with_rule"] + s["without_rule"], s["agents"])
+        _, out = self.fx.run("--savings", "--embers-on", "..2030-12-31")
+        self.assertIn("  2 subagents on by date alone, neither the relay nor with the rule in "
+                      "their transcript, left as they ran", out.splitlines())
 
     def test_dates_in_place_of_the_transcript(self):
         self.two_groups()
@@ -975,12 +1060,21 @@ class SavingsTable(unittest.TestCase):
                             "--embers-on", f"{day1}..{day2}", "--since", day1)["savings"]
         self.assertEqual((s["off"]["agents"], s["on"]["agents"]), (0, 2))
         self.assertEqual(len(s["embers_on"]), 2)
+        # the window left open: a request is on by the first range as well as by the last.
+        # Day 0's agents ran requests at 10, 17 and 24 or 1218 s; on until 15 s, their first
+        # request is on and the rest off; day 1's two agents are on by the second range.
+        s = self.fx.summary("--savings", "--embers-on", "..2030-01-07T09:00:15Z",
+                            "--embers-on", f"{day1}..")["savings"]
+        self.assertEqual((s["on"]["agents"], s["on"]["requests"]), (4, 2 + 6))
+        self.assertEqual((s["off"]["agents"], s["off"]["requests"]), (2, 4))
 
     def test_options_that_do_not_go_together_are_refused(self):
         for args in (["--embers-on", "2030-01-01.."], ["--savings", "--split", "2030-01-08"],
                      ["--savings", "--list"], ["--savings", "--embers-on", "2030-01-01"],
                      ["--savings", "--embers-on", "2030-01-08..2030-01-01"],
-                     ["--savings", "--embers-on", "soon.."]):
+                     ["--savings", "--embers-on", "soon.."],
+                     ["--savings", "--since", "2030-02-01", "--until", "2030-01-01"],
+                     ["--since", "2030-01-01", "--until", "2030-01-01"]):
             with self.subTest(args=args), contextlib.redirect_stderr(io.StringIO()), \
                     self.assertRaises(SystemExit):
                 rw.main(["--root", str(self.fx.root), *args])

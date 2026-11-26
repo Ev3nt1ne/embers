@@ -283,7 +283,8 @@ two ways, or not at all.
 
 - *Everything else stays as it ran.* A rewrite after a long request cannot be avoided on a
   5-minute cache. A rewrite after a tool wait might have been avoided by the waiting rule, so
-  leaving it in understates the saving.
+  leaving it in understates the saving. A subagent that already writes to the 1-hour cache
+  stays whole, Δ = 0: the hook gives it no rule, and it has the relay's cache already.
 
 The assumption that carries this column: the relay is picked exactly for the subagents that were
 sent work back, and for no other. A relay picked for one-shot work pays `(w1 − w5) W` for
@@ -298,11 +299,15 @@ the previous request's start, was not itself a rewrite, and read its cache, woul
 Δ = (w5 − r) Σ R  −  (w1 − w5) W1        the sum over relay requests with 300 s < g < 3600 s
 ```
 
-Subagents with the waiting rule stay as they ran: a rewrite the rule prevented leaves nothing in
-the transcript to price. Nor can the transcripts show a cold resume the guide replaced with a
-fresh agent. Both make this column's saving a lower bound. The other way round, the column
-counts each late return to a relay as a cold resume of the same agent; a main session that would
-have started a fresh agent instead (section 1) would have paid less, and the relay saved less.
+Every other subagent stays as it ran, with the waiting rule or, by date, without it. What the
+transcripts cannot show pulls both ways, so this column's saving is no bound either way. A
+rewrite the rule prevented leaves nothing to price, nor does a cold resume the guide replaced
+with a fresh agent: both make the real saving larger. Polls kept up past section 3's wait*
+cost more than letting the cache go cold, and they are priced the same in both cells, since
+agents polled long jobs before Embers too: they make the real saving smaller. The column also
+counts each late return to a relay as a cold resume of the same agent; a main session that
+would have started a fresh agent instead (section 1) would have paid less, and the relay saved
+less.
 
 **Saved.** Per column, without minus with: `−Δ` in the off column, `Δ` in the on column; the
 share is the saving over the cost without Embers. The two columns are different subagents doing

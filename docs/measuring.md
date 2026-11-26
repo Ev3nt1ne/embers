@@ -106,11 +106,16 @@ How to read it:
   been installed: the 7 subagents that were sent work back become relays, which costs $45.46
   more in 1-hour writes, and 22 of their rewrites, all under an hour, read their cache instead
   ($79.41 less). The 4 notification rewrites were all in those 7 agents, so no polls are
-  computed. The on column is the week after, re-priced as if Embers had not been installed: the
-  24 relays lose their premium ($22.60 less) and the 25 late requests above rewrite their cache
-  ($32.81 more). The 113 subagents with the waiting rule are left as they ran.
-- **The on column's 3.2% is a lower bound.** The tool cannot see the rewrites the waiting rule
-  prevented, nor the cold resumes the guide replaced with fresh agents.
+  computed. The install day's relay test, already on a 1-hour cache, is left as it ran. The on
+  column is the week after, re-priced as if Embers had not been installed: the 24 relays lose
+  their premium ($22.60 less) and the 25 late requests above rewrite their cache ($32.81 more).
+  The 113 subagents with the waiting rule, and the 9 counted on by date that ran without it, are
+  left as they ran.
+- **The on column's 3.2% is neither a floor nor a ceiling.** The tool cannot see the rewrites
+  the waiting rule prevented, nor the cold resumes the guide replaced with fresh agents: both
+  would make the saving larger. Nor can it see the polls the rule kept up past the break-even
+  of [math.md](math.md#3-waiting-on-a-tool), where letting the cache go cold costs less: those
+  would make it smaller.
 - **The off column's 6.9% assumes the relay is picked exactly where work comes back.** In the
   week after, 8 of the 24 relays never had a gap over 240 seconds: one-shot work, which pays the
   1-hour write for nothing.
@@ -231,25 +236,31 @@ each request at its own model. A computed cell prices the same requests the othe
   notification is replaced by the waiting rule's polls: one per `chunk_s` of the gap (170 s),
   less the request that ends the wait, at least one. Each poll reads the context and writes the
   `[poll]` tail; its output is counted too. Every other request stays as it ran, a rewrite after
-  a long request included.
+  a long request included. A subagent that already writes to the 1-hour cache, such as an agent
+  of your own with `cacheTtl: 1h`, stays as it ran: Embers gives it nothing.
 - *On, computed without Embers.* The relay's 1-hour writes are priced at the 5-minute write.
   Each relay request that started between 5 minutes and an hour after the previous request's
   start, and read its cache, would have found a 5-minute cache gone: what it read is priced as a
-  5-minute write. Subagents with the waiting rule are left as they ran.
+  5-minute write. Every other subagent is left as it ran: those with the waiting rule, and
+  with `--embers-on` those counted on by date without it.
 
 Under the table, a few lines give the parts of each computed cell: the subagents that would
 have been the relay, with what their 1-hour writes add and their warm resumes save; the
-notifications polled instead; the relays, with what 5-minute writes save and what their late
-requests would have cost cold. `--json` carries the same figures and parts.
+notifications polled instead; any subagents already on a 1-hour cache; the relays, with what
+5-minute writes save and what their late requests would have cost cold; the subagents with the
+rule and, by date, those without it. `--json` carries the same figures and parts.
 
 **How to read it.**
 
 - Read each column's *Embers saved* row on its own. The two columns are different subagents
   doing different work, so their costs are not comparable with each other.
-- The on column's saving is a lower bound. It cannot see the rewrites the waiting rule
-  prevented in 5-minute subagents, since a subagent that kept its cache warm shows no rewrite to
-  price, nor the cold resumes the guide replaced with fresh agents. Both make the real saving
-  larger.
+- The on column's saving is no bound either way: two effects the transcripts cannot show pull
+  opposite ways. The rewrites the waiting rule prevented in 5-minute subagents (a subagent that
+  kept its cache warm shows no rewrite to price) and the cold resumes the guide replaced with
+  fresh agents make the real saving larger. The polls the rule kept up past the break-even of
+  [math.md](math.md#3-waiting-on-a-tool), where letting the cache go cold costs less, make it
+  smaller. The tool prices those polls the same in both cells, since agents polled long jobs
+  before Embers too.
 - The off column's computed cell assumes the relay is picked exactly where work comes back, and
   nowhere else. A relay picked for one-shot work pays the 1-hour write for nothing, so the real
   saving there may be smaller.

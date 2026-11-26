@@ -552,9 +552,11 @@ def embers_parts(agent, since=None, until=None, relay_type=RELAY, ranges=None):
     return [(True, on)] * bool(on) + [(False, off)] * bool(off)
 
 
-def with_embers(reqs, prices, one_hour_s=ONE_HOUR_S, chunk_s=170, poll=None):
+def with_embers(reqs, prices, one_hour_s=ONE_HOUR_S, chunk_s=170, poll=None, one_hour=False):
     """What a part that ran without Embers would have cost with it, as a change in USD.
 
+    - An agent that already writes to the 1-hour cache (one_hour) gets nothing from Embers: the
+      hook injects no rule into it, and it has the relay's cache already. It stays as it ran.
     - An agent with a cold rewrite caused by a resume would have been the relay: every 5-minute
       write is priced at the 1-hour write, and each rewrite whose gap is under the 1-hour
       lifetime reads its rewritten tokens instead of writing them (its new tail stays written).
@@ -566,10 +568,11 @@ def with_embers(reqs, prices, one_hour_s=ONE_HOUR_S, chunk_s=170, poll=None):
     - Every other request stays as it was.
     """
     poll = poll or {"tail_tokens": 300, "output_tokens": 150}
-    d = {"relay": any(r["rewrite"] and r["cause"] == RESUME for r in reqs),
+    d = {"relay": not one_hour and any(r["rewrite"] and r["cause"] == RESUME for r in reqs),
+         "one_hour": bool(one_hour),
          "relay_1h_usd": 0.0, "relay_rewrites_read": 0, "relay_read_usd": 0.0,
          "notifications_polled": 0, "polls": 0, "notification_usd": 0.0, "poll_usd": 0.0}
-    for r in reqs:
+    for r in reqs if not one_hour else []:
         p = prices.rates(r["model"])
         if d["relay"]:
             d["relay_1h_usd"] += p["usd"] * (p["w1"] - p["w5"]) * r["write_5m"]
@@ -609,32 +612,45 @@ def without_embers(reqs, prices, is_relay, lifetimes_s=(FIVE_MINUTES_S, ONE_HOUR
 
 def savings(agents, prices, cfg, since=None, until=None, relay_type=RELAY, ranges=None):
     """The --savings table: per group (off, on) its subagents and requests, its prompt cost
-    measured and computed, what Embers saved, and the parts of the computed change."""
+    measured and computed, what Embers saved, and the parts of the computed change.
+
+    What it cannot price pulls both ways: rewrites the waiting rule prevented, and cold resumes
+    the guide replaced with fresh agents, leave nothing to price and make the real saving
+    larger; polls kept up past the break-even of docs/math.md section 3 are priced the same in
+    both cells and make it smaller. So the on column's saving is no bound either way."""
     lifetimes = (cfg["ttl"]["five_minutes_s"], cfg["ttl"]["one_hour_s"])
     groups = {
         "off": {"agents": 0, "requests": 0, "measured_usd": 0.0, "change_usd": 0.0,
+                "one_hour_agents": 0,
                 "would_be_relays": 0, "relay_1h_usd": 0.0, "relay_rewrites_read": 0,
                 "relay_read_usd": 0.0, "notifications_polled": 0, "polls": 0,
                 "notification_usd": 0.0, "poll_usd": 0.0},
         "on": {"agents": 0, "requests": 0, "measured_usd": 0.0, "change_usd": 0.0,
-               "with_rule": 0, "relays": 0, "relay_1h_usd": 0.0, "requests_cold": 0,
-               "cold_usd": 0.0},
+               "with_rule": 0, "without_rule": 0, "relays": 0, "relay_1h_usd": 0.0,
+               "requests_cold": 0, "cold_usd": 0.0},
     }
     for agent in agents:
+        is_relay = agent["type"] == relay_type
+        # the hook decides per agent, at its start: one 1-hour write makes it a 1-hour agent
+        one_hour = any(r["write_1h"] > 0 for r in agent["requests"])
         for on, reqs in embers_parts(agent, since, until, relay_type, ranges):
             g = groups["on" if on else "off"]
             g["agents"] += 1
             g["requests"] += len(reqs)
             g["measured_usd"] += sum(prices.input_cost(r) for r in reqs)
             if on:
-                d = without_embers(reqs, prices, agent["type"] == relay_type, lifetimes)
+                d = without_embers(reqs, prices, is_relay, lifetimes)
                 g["with_rule"] += agent["embers_rule"]
+                # on by date alone: neither the relay nor marked by the rule
+                g["without_rule"] += not (is_relay or agent["embers_rule"])
                 g["relays"] += d["relay"]
             else:
-                d = with_embers(reqs, prices, lifetimes[1], cfg["ttl"]["chunk_s"], cfg["poll"])
+                d = with_embers(reqs, prices, lifetimes[1], cfg["ttl"]["chunk_s"], cfg["poll"],
+                                one_hour)
                 g["would_be_relays"] += d["relay"]
+                g["one_hour_agents"] += d["one_hour"]
             for key, value in d.items():
-                if key != "relay":
+                if key not in ("relay", "one_hour"):
                     g[key] += value
     off, on = groups["off"], groups["on"]
     off["without_usd"] = off["measured_usd"]
@@ -785,10 +801,20 @@ def render_savings(s, unknown_models=(), unreadable=0):
         f"{_usd(on['cold_usd'])} more as {on['requests_cold']:,} requests after a gap of 5 to "
         "60 minutes rewrite their cache",
         f"  {on['with_rule']:,} subagents with the waiting rule, left as they ran",
-        "What it cannot see:",
+    ]
+    if s["detection"] == "dates":
+        out.append(f"  {on['without_rule']:,} subagents on by date alone, neither the relay nor "
+                   "with the rule in their transcript, left as they ran")
+    if off["one_hour_agents"]:
+        out.insert(out.index("Embers on, computed without Embers:"),
+                   f"  {off['one_hour_agents']:,} subagents already on a 1-hour cache, left as "
+                   "they ran")
+    out += [
+        "What it cannot see, pulling opposite ways:",
         "  - rewrites the waiting rule prevented in 5-minute subagents, and cold resumes the guide",
-        "    replaced with fresh agents: both make the real saving larger, so the on column's",
-        "    saving is a lower bound;",
+        "    replaced with fresh agents, make the real saving larger;",
+        "  - polls the waiting rule kept up past the break-even, where letting the cache go cold",
+        "    costs less (docs/math.md, section 3), make it smaller;",
         "  - the off column's computed cell assumes the relay is picked exactly where work came",
         "    back, and nowhere else.",
         "(prompt side only, at list prices; until is exclusive; times are UTC)",
@@ -884,6 +910,8 @@ def main(argv=None):
     args = ap.parse_args(argv)
     if args.min_write <= 0:
         ap.error("--min-write must be positive")
+    if args.since and args.until and args.until <= args.since:
+        ap.error("--until must come after --since")
     if args.embers_on and not args.savings:
         ap.error("--embers-on needs --savings")
     if args.savings and (args.split or args.list or args.detail):

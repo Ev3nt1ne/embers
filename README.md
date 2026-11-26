@@ -171,8 +171,8 @@ Change a number in [config/prices.toml](config/prices.toml) and run
 [tools/rewrites.py](tools/rewrites.py) counts and prices the cold rewrites in your own subagent
 transcripts, before Embers and after: [docs/measuring.md](docs/measuring.md#measure-your-own).
 With `--savings` it prints what Embers saved you: your subagents' prompt cost without Embers and
-with it, measured where they ran that way and computed for the other, with a lower bound where
-the transcripts cannot show what Embers prevented:
+with it, measured where they ran that way and computed for the other, and what the transcripts
+cannot show, which pulls both ways:
 [docs/measuring.md](docs/measuring.md#did-embers-save-you-money).
 
 ### Sources
